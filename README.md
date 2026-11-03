@@ -2,8 +2,6 @@
 
 ROS 2와 Gazebo에서 다중 LIMO 차량의 출차 선택부터 빈 주차면 재주차까지 연결한 팀 캡스톤 결과물입니다.
 
-> 이 저장소는 [SEA:ME Korea 팀 저장소](https://github.com/SEA-ME-KOREA/capstoneproject_2026F1)의 기존 Git 이력을 유지하면서, 공개용 문서와 생성 파일만 정리한 버전입니다.
-
 ## Scenario
 
 ```mermaid
@@ -34,8 +32,6 @@ flowchart LR
 - `reset_robots.sh`로 Gazebo를 재시작하지 않고 차량 위치를 초기화해 반복 시험할 수 있도록 구성했습니다.
 - 출차는 경로 추종, 재주차는 Hybrid A*와 Reeds-Shepp 경로를 사용하는 구조로 통합했습니다.
 - 상세 설계와 분석은 [SYSTEM_OVERVIEW.md](SYSTEM_OVERVIEW.md), [SYSTEM_ANALYSIS.md](SYSTEM_ANALYSIS.md), [REMOTE_PARKING_IMPLEMENTATION_GUIDE.md](REMOTE_PARKING_IMPLEMENTATION_GUIDE.md)에 남겨져 있습니다.
-
-정량 성능 수치는 이 저장소의 기록만으로 재확인할 수 없어 별도로 기재하지 않았습니다. 현재 정리 환경은 Ubuntu 24.04이며, 아래의 원래 실행 환경에서 전체 시나리오를 새로 재시험한 것은 아닙니다.
 
 ## Original Environment
 
@@ -75,11 +71,6 @@ bash src/remote_parking_world/scripts/reset_robots.sh teleport
 ros2 service call /start_remote_parking std_srvs/srv/Trigger '{}'
 ```
 
-## Repository Relationship
+## License
 
-- [YSM Validation Workspace](https://github.com/gnoyk/YSM_ws): 개발 단계에서 사용한 ROS 2/Gazebo 시뮬레이션 검증 환경과 실행 도구
-- 이 저장소: 원격 주차 시나리오를 하나의 FSM으로 통합한 팀 최종 결과물
-
-## Attribution
-
-원본 팀 저장소의 커밋 이력을 보존했습니다. 패키지별 라이선스 표기와 외부 구성요소의 출처는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 확인해 주세요. 저장소 전체에 단일 라이선스를 새로 부여하지 않았습니다.
+패키지별 라이선스와 외부 구성요소 고지는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 확인해 주세요.
