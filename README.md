@@ -74,3 +74,8 @@ ros2 service call /start_remote_parking std_srvs/srv/Trigger '{}'
 ## License
 
 패키지별 라이선스와 외부 구성요소 고지는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 확인해 주세요.
+
+## Repository Relationship
+
+- [Remote Parking Simulation Environment](https://github.com/gnoyk/WeMeet_Capstone_Base_Environment): LIMO 주차 시나리오 개발에 사용한 ROS 2/Gazebo 시뮬레이션 환경과 실행 도구
+- 이 저장소: 다중 차량 원격 주차 시나리오를 FSM으로 통합한 캡스톤 프로젝트
