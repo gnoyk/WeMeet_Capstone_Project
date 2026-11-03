@@ -6,9 +6,8 @@ history is retained so that authorship can be inspected with Git.
 
 ## Related development workspace
 
-The earlier simulation and validation workspace is maintained separately at
-<https://github.com/gnoyk/YSM_ws>. Similar files can appear in both repositories
-because they belong to the same project development lineage.
+The simulation environment development workspace is maintained at
+<https://github.com/gnoyk/WeMeet_Capstone_Base>.
 
 ## Package metadata
 
