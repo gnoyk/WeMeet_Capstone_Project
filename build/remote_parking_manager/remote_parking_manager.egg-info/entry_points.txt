@@ -1,3 +1,0 @@
-[console_scripts]
-mission_manager = remote_parking_manager.mission_manager:main
-

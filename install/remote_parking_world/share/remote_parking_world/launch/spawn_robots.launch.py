@@ -1,1 +1,0 @@
-/home/jihyun/remote_parking_ws_1/src/remote_parking_world/launch/spawn_robots.launch.py

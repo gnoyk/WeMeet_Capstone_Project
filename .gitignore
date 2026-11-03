@@ -1,0 +1,17 @@
+# ROS 2 / colcon outputs
+/build/
+/install/
+/log/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Editors and OS files
+.vscode/
+.idea/
+*~
+.DS_Store

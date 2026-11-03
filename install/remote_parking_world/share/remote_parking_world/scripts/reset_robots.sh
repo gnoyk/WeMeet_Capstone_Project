@@ -1,1 +1,0 @@
-/home/jihyun/remote_parking_ws_1/src/remote_parking_world/scripts/reset_robots.sh

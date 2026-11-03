@@ -1,1 +1,0 @@
-/home/jihyun/remote_parking_ws_1/build/limo_car/ament_cmake_environment_hooks/local_setup.sh
