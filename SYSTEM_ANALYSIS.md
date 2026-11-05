@@ -1,132 +1,132 @@
-# Remote Parking System 분석 문서
+# Remote Parking System Analysis
 
-## 목차
+## Table of Contents
 
-1. [전체 프로그램 흐름](#1-전체-프로그램-흐름)
-2. [LIMO 1 주요 알고리즘](#2-limo-1-주요-알고리즘)
-3. [LIMO 2 주요 알고리즘](#3-limo-2-주요-알고리즘)
+1 . [Full Program Flow](# 1 -Full-Program-Flow)
+2 . [ LIMO 1 main-algorithm](# 2 -limo -1 -main-algorithm)
+3 . [ LIMO 2 main-algorithm](# 3 -limo -2 -main-algorithm)
 
 ---
 
-## 1. 전체 프로그램 흐름
+## 1. Overall System Flow
 
-### 1.1 시스템 개요
+### 1.1 System Overview
 
-이중주차된 LIMO 1이 뒤로 빠지고, 사용자가 선택한 차량(A2/A3/A4 중 하나)이 출차한 뒤, LIMO 1이 비어진 슬롯에 재주차하는 원격 주차 시나리오이다.
+This is a remote parking scenario in which the double-parked LIMO 1 pulls out, the user-selected vehicle (one of A2 /A3/A4) pulls out, and LIMO 1 re-parks in the empty slot.
 
-**주차장 배치 (축척 1/5.6):**
+**Parking lot layout (scale 1 /5.6):**
 
 ```
                    North Wall (y=1.585)
  ┌───────────────────────────────────────────────────────────────┐
  │ [A-1]  [A0]  [A1]  [A2★] [★A3★] [A4★]  [A5]  [A6]          │
  │-1.575 -1.125 -0.675 -0.225 0.225  0.675  1.125  1.575       │
- │                      y = 0.985 (슬롯 중심)                    │
+│ y = 0.985 (slot center) │
  │                                                               │
- │──────────────── 차로 (y ≈ 0, 상하 에지 ±0.535) ──────────────│
+│──────────────── by car (y ≈ 0, top and bottom edges ± 0.535 ) ──────────────│
  │                                                               │
  │ [B-1]  [B0]  [B1]   [B2]   [B3]   [B4]   [B5]  [B6]         │
  │                      y = -0.985                               │
  └───────────────────────────────────────────────────────────────┘
                    South Wall (y=-1.585)
-     West Wall (x=-1.90)                     Exit → +X (동쪽 개방)
+West Wall (x= -1.90 ) Exit → +X (open to the east)
 ```
 
-- 정적 차량 13대 (Gazebo 월드에 고정 배치):
-  - Row A: A-1, A0, A1, A5, A6 (5대)
-  - Row B: B-1, B0, B1, B2, B3, B4, B5, B6 (8대)
-- 동적 로봇 4대 (spawn_robots.launch.py 에서 스폰):
-  - LIMO 1: 차로에서 A3 앞 이중주차
-  - LIMO 2: A3 슬롯 주차
-  - LIMO A2: A2 슬롯 주차
-  - LIMO A4: A4 슬롯 주차
-- A2, A3, A4는 사용자 선택에 따라 출차 가능한 차량 (★ 표시)
+- Static vehicle 13 vs. (fixed placement in Gazebo world):
+- Row A: A -1 , A 0 , A 1 , A 5 , A 6 (5)
+- Row B: B -1 , B 0 , B 1 , B 2 , B 3 , B 4 , B 5 , B 6 (vs. 8)
+- Dynamic robot 4 (spawn at spawn_robots.launch.py):
+- LIMO 1: Double parking in front of A3 in lane A
+- LIMO 2 : A3 slot parking
+- LIMO A2 : A2 slot parking
+- LIMO A4 : A4 slot parking
+- A2, A3, and A4 are vehicles that can be parked according to user selection (marked with ★)
 
-### 1.2 패키지 구조
+### 1.2 Package Structure
 
-| 패키지 | 타입 | 역할 |
+| package | Type | Role |
 |--------|------|------|
-| `remote_parking_world` | CMake | Gazebo 월드, 로봇 URDF/Xacro, Launch 파일, 유틸 스크립트 |
-| `limo_car` | CMake | LIMO 로봇 URDF/Xacro 모델 정의 |
-| `remote_parking_manager` | Python | 마스터 FSM (`mission_manager`) + 경로 계획기 (`hybrid_astar_planner`) |
-| `my_valet_parking` | Python | LiDAR 슬롯 탐지 (`dynamic_tracker_node`), 독립 출차 노드 (`limo2_exit_handler`), 키보드 텔레옵 (`limo2_arrow_teleop`) 등 |
+| `remote_parking_world` | CMake | Gazebo world, robot URDF /Xacro , Launch file, utility script |
+| `limo_car` | CMake |  LIMO robot URDF /Xacro model definition |
+| `remote_parking_manager` | Python | master FSM (`mission_manager`) + route planner (`hybrid_astar_planner`) |
+| `my_valet_parking` | Python | LiDAR slot detection (`dynamic_tracker_node`), independent exit node (`limo2_exit_handler`), keyboard teleop (`limo2_arrow_teleop`), etc. |
 
-### 1.3 실행 순서 및 노드 기동 타이밍
+### 1.3 Execution order and node startup timing
 
 ```
 [Terminal 1] ros2 launch remote_parking_world world_server.launch.py gui:=true
-    → gzserver 시작 (정적 월드 + 13대 정적 차량 로드)
-    → gzclient 시작 (GUI)
+→ Start gzserver (load static world + 13 vs. static vehicle)
+→ Start gzclient (GUI)
 
 [Terminal 2] ros2 launch remote_parking_world spawn_robots.launch.py
     → T=0s:  robot_state_publisher × 4 + joint_state_publisher × 4
-             (limo1, limo2, limo_a2, limo_a4 네임스페이스)
-    → T=3s:  Gazebo에 LIMO 1, LIMO 2, LIMO A2, LIMO A4 엔티티 스폰
-    → T=5s:  dynamic_tracker_node 시작 (LiDAR 슬롯 탐지)
-    → T=6s:  mission_manager 시작 (마스터 FSM, IDLE 상태 대기)
-    → T=0s:  rviz2 시작 (시각화)
+(limo 1 , limo 2 , limo_a2 , limo_a4 namespace)
+→ T= 3s : Spawn entities LIMO 1 , LIMO 2 , LIMO A2 , LIMO A4 in Gazebo
+→ T= 5s: Start dynamic_tracker_node (Detect LiDAR slot)
+→ T= 6s : Start mission_manager (wait for master FSM and IDLE status)
+→ T= 0s : start rviz 2 (visualization)
 
 [Terminal 3] ros2 service call /start_remote_parking std_srvs/srv/Trigger '{}'
-    → mission_manager의 _start_cb() 호출
-    → 양쪽 로봇 오도메트리 수신 확인 후 FSM을 IDLE → LIMO1_EVADE로 전이
+→ call start_cb() of mission_manager
+→ After confirming reception of both robot odometry, transfer FSM to IDLE → LIMO1_EVADE
 
-[Terminal 4] bash scripts/select_car.sh a3   (또는 a2, a4)
-    → WAIT_FOR_SELECTION 상태에서 출차 차량 선택
-    → /select_exit_car/a3 서비스 호출 → LIMO2_EXIT_INIT으로 전이
+[Terminal 4 ] bash scripts/select_car.sh a3 (or a2, a4)
+→ Select exit vehicle in WAIT_FOR_SELECTION state
+→ /select_exit_car/a3 service call → Transition to LIMO2_EXIT_INIT
 ```
 
-### 1.4 초기 로봇 배치
+### 1.4 Initial robot deployment
 
-| 로봇 | 위치 (x, y, z) | 방향 (yaw) | 상태 |
+| robot | position (x, y, z) | direction (yaw) | status |
 |------|----------------|-----------|------|
-| LIMO 1 | (0.225, 0.35, 0.145) | 0 rad (+X 방향) | 차로에서 A3 앞 이중주차 |
-| LIMO 2 | (0.225, 0.985, 0.145) | -π/2 rad (-Y 방향) | A3 슬롯 정상 주차 |
-| LIMO A2 | (-0.225, 0.985, 0.145) | -π/2 rad (-Y 방향) | A2 슬롯 정상 주차 |
-| LIMO A4 | (0.675, 0.985, 0.145) | -π/2 rad (-Y 방향) | A4 슬롯 정상 주차 |
+|  LIMO 1 | (0.225, 0.35, 0.145) |  0 rad (+X direction) | Double parking in front of A3 in the lane |
+|  LIMO 2 | (0.225, 0.985, 0.145) | -π /2 rad (-Y direction) | A3 slot normal parking |
+|  LIMO A2 | (-0.225, 0.985, 0.145) | -π /2 rad (-Y direction) | A2 slot normal parking |
+|  LIMO A4 | (0.675, 0.985, 0.145) | -π /2 rad (-Y direction) | A4 slot normal parking |
 
-### 1.5 FSM (Finite State Machine) 상태 전이
+### 1.5 FSM (Finite State Machine) state transition
 
 ```
 IDLE
-  │  /start_remote_parking 서비스 호출
+│ /start_remote_parking service call
   ▼
 LIMO1_EVADE ─────────────────────────────────────────────────────────
-  │  LIMO 1이 차로를 따라 후진하여 출차 경로 확보
-  │  종료조건: 목표 위치 (-0.9, 0.35) 도달 OR 후방 장애물 1.5초 이상 감지
+│ LIMO 1 Reverse along this lane to secure the exit route.
+│ End condition: Target position (-0.9, 0.35) reached OR rear obstacle detected for more than 1.5 seconds
   ▼
 WAIT_FOR_SELECTION ──────────────────────────────────────────────────
-  │  사용자가 출차할 차량 선택 (a2/a3/a4 중 하나)
+│ User selects vehicle to exit (one of a2 /a3/a4)
   │  bash scripts/select_car.sh a3
   │  → ros2 service call /select_exit_car/a3 std_srvs/srv/Trigger '{}'
   ▼
 LIMO2_EXIT_INIT ─────────────────────────────────────────────────────
-  │  선택된 차량의 출차 경로(sinusoidal 웨이포인트) 계산
-  │  repark_goal을 출차한 슬롯 좌표로 동적 업데이트
-  │  즉시 다음 상태로 전이
+│ Calculate exit route (sinusoidal waypoint) of selected vehicle
+│ Dynamically updated with the slot coordinates from which repark_goal was withdrawn
+│ Immediately transition to the next state
   ▼
 LIMO2_EXITING ───────────────────────────────────────────────────────
-  │  선택된 차량이 Pure Pursuit으로 웨이포인트 추종하며 출차
-  │  종료조건: 최종 웨이포인트 도달(허용 오차 0.12m) OR 타임아웃 30초
+│ The selected vehicle follows the waypoint using Pure Pursuit and leaves the vehicle.
+│ End condition: final waypoint reached (tolerance 0.12m ) OR timeout 30 seconds
   ▼
 LIMO1_SCAN ──────────────────────────────────────────────────────────
-  │  dynamic_tracker_node가 빈 슬롯을 확인
-  │  종료조건: /limo1/target_slot 수신 OR 타임아웃 10초 (fallback 좌표 사용)
+│ dynamic_tracker_node checks for empty slots
+│ End condition: Receive /limo1/target_slot OR timeout 10 seconds (use fallback coordinates)
   ▼
 LIMO1_REPARK ────────────────────────────────────────────────────────
-  │  Hybrid A* 경로 계획 → 세그먼트별 Pure Pursuit 추종 → 최종 정렬
-  │  종료조건: 목표 위치 오차 <4cm + yaw 오차 <3° 를 0.8초 유지 OR 타임아웃 60초
+│ Hybrid A* route planning → Pure Pursuit tracking by segment → Final Alignment
+│ End condition: Mission completion criteria of position error < 4cm and yaw error < 3° maintained for 0.8 seconds, OR timeout 60 seconds
   ▼
 FINISH ──────────────────────────────────────────────────────────────
-  │  모든 로봇 정지 (cmd_vel = 0)
+│ Stop all robots (cmd_vel = 0)
   ▼
-(IDLE 대기 — 재호출 가능)
+(Wait IDLE — can be recalled)
 
-※ ABORT: 경로 계획 실패, 타임아웃 등 비상 시 모든 로봇 정지
+※ ABORT: Stop all robots in case of emergency such as path planning failure, timeout, etc.
 ```
 
-### 1.6 센서 사용 흐름
+### 1.6 sensor usage flow
 
-#### 런타임 노드 구성 및 토픽 흐름
+#### Runtime node configuration and topic flow
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -141,441 +141,441 @@ FINISH ────────────────────────�
   ┌──────────────────────────────────────────────────────────────┐
   │             mission_manager (remote_parking_manager)         │
   │                                                              │
-  │  구독:                                                       │
-  │    /limo1/odom         → 위치·yaw 추출                       │
-  │    /limo1/scan         → 전방·후방 장애물 거리 (±30° 섹터)    │
-  │    /limo1/rear_camera  → 후방 깊이 영상 → 5th 백분위 거리    │
-  │    /limo1/front_camera → 전방 깊이 영상                      │
-  │    /limo2/odom         → LIMO 2 위치·yaw 추출                │
-  │    /limo_a2/odom       → LIMO A2 위치·yaw 추출               │
-  │    /limo_a4/odom       → LIMO A4 위치·yaw 추출               │
-  │    /limo2/scan         → LIMO 2 전방·후방 장애물 거리         │
-  │    /limo2/rear_camera  → LIMO 2 후방 깊이 영상               │
-  │    /limo1/target_slot  → 슬롯 위치 (dynamic_tracker에서 수신) │
-  │    /select_exit_car    → 출차 차량 선택 (토픽, 보조)          │
-  │    /remote_parking/reset → 리셋 명령                         │
+│ Subscription: │
+│ /limo1/odom → Position/yaw extraction │
+│ /limo1/scan → Front/rear obstacle distance (± 30° sector) │
+│ /limo1/rear_camera → posterior depth image → 5 th percentile distance │
+│ /limo1/front_camera → Front depth image │
+│ /limo2/odom → LIMO 2 position/yaw extraction │
+│ /limo_a2/odom → LIMO A2 position/yaw extraction │
+│ /limo_a4/odom → LIMO A4 position/yaw extraction │
+│ /limo2/scan → LIMO 2 Front/rear obstacle distance │
+│ /limo2/rear_camera → LIMO 2 posterior depth image │
+│ /limo1/target_slot → Slot location (received from dynamic_tracker) │
+│ /select_exit_car → Select exit vehicle (topic, auxiliary) │
+│ /remote_parking/reset → Reset command │
   │                                                              │
-  │  서비스 서버:                                                 │
-  │    /start_remote_parking   → 미션 시작                       │
-  │    /reset_parking          → 미션 리셋                       │
-  │    /select_exit_car/a2     → A2 차량 선택                    │
-  │    /select_exit_car/a3     → A3 차량 선택                    │
-  │    /select_exit_car/a4     → A4 차량 선택                    │
+│ Service server: │
+│ /start_remote_parking → Start mission │
+│ /reset_parking → Mission Reset │
+│ /select_exit_car/a2 → A2 Select vehicle │
+│ /select_exit_car/a3 → A3 Select vehicle │
+│ /select_exit_car/a4 → A4 Select vehicle │
   │                                                              │
-  │  발행:                                                       │
-  │    /limo1/cmd_vel      → LIMO 1 속도 명령                    │
-  │    /limo2/cmd_vel      → LIMO 2 속도 명령                    │
-  │    /limo_a2/cmd_vel    → LIMO A2 속도 명령                   │
-  │    /limo_a4/cmd_vel    → LIMO A4 속도 명령                   │
-  │    /remote_parking/status → 현재 FSM 상태 문자열             │
+│ Published by: │
+│ /limo1/cmd_vel → LIMO 1 speed command │
+│ /limo2/cmd_vel → LIMO 2 speed command │
+│ /limo_a2/cmd_vel → LIMO A2 speed command │
+│ /limo_a4/cmd_vel → LIMO A4 speed command │
+│ /remote_parking/status → Current FSM status string │
   └──────────────────────────────────────────────────────────────┘
                  ▲
                  │ /limo1/target_slot
   ┌──────────────────────────────────────────────────────────────┐
   │            dynamic_tracker_node (my_valet_parking)           │
   │                                                              │
-  │  구독:                                                       │
-  │    /limo1/scan  → +90°±8° 사이드 스캔 + 전체 FOV 투영        │
-  │    /limo1/odom  → ego 위치 보정 (odom 프레임 투영)           │
+│ Subscription: │
+│ /limo1/scan → + 90° ± 8° side scan + full FOV projection │
+│ /limo1/odom → ego position correction (odom frame projection) │
   │                                                              │
-  │  발행:                                                       │
-  │    /limo1/target_slot → 비어진 슬롯 위치 (PoseStamped)       │
+│ Published by: │
+│ /limo1/target_slot → Empty slot position (PoseStamped) │
   └──────────────────────────────────────────────────────────────┘
 ```
 
-#### 센서별 용도 정리
+#### Sensor Usage Summary
 
-| 센서 | 토픽 | 사용 노드 | 용도 |
+| sensor | Topic | Use Nodes | Use |
 |------|------|----------|------|
-| Odometry (LIMO 1) | `/limo1/odom` | mission_manager, dynamic_tracker | 위치·yaw 추적, odom 프레임 좌표 변환 |
-| Odometry (LIMO 2) | `/limo2/odom` | mission_manager | 출차 중 위치·yaw 추적 |
-| Odometry (LIMO A2) | `/limo_a2/odom` | mission_manager | 출차 중 위치·yaw 추적 |
-| Odometry (LIMO A4) | `/limo_a4/odom` | mission_manager | 출차 중 위치·yaw 추적 |
-| 2D LiDAR (LIMO 1) | `/limo1/scan` | mission_manager, dynamic_tracker | 전방/후방 장애물 감지, 사이드 슬롯 점유 판정 |
-| 2D LiDAR (LIMO 2) | `/limo2/scan` | mission_manager | 전방/후방 장애물 감지 |
-| 후방 깊이 카메라 (LIMO 1) | `/limo1/rear_camera/depth/image_raw` | mission_manager | 후진 시 후방 장애물 거리 (32FC1 → 5th 백분위) |
-| 전방 깊이 카메라 (LIMO 1) | `/limo1/front_camera/depth/image_raw` | mission_manager | 전방 장애물 보조 감지 |
-| 후방 깊이 카메라 (LIMO 2) | `/limo2/rear_camera/depth/image_raw` | mission_manager | 출차 시 후방 장애물 거리 |
+| Odometry ( LIMO 1 ) | `/limo1/odom` |  mission_manager , dynamic_tracker | Position·yaw tracking, odom frame coordinate conversion |
+| Odometry ( LIMO 2 ) | `/limo2/odom` |  mission_manager | Location/yaw tracking while leaving the car |
+| Odometry ( LIMO A2 ) | `/limo_a2/odom` |  mission_manager | Location/yaw tracking while leaving the car |
+| Odometry ( LIMO A4 ) | `/limo_a4/odom` |  mission_manager | Location/yaw tracking while leaving the car |
+|  2 D LiDAR ( LIMO 1 ) | `/limo1/scan` |  mission_manager , dynamic_tracker | Front/rear obstacle detection, side slot occupancy determination |
+|  2 D LiDAR ( LIMO 2 ) | `/limo2/scan` |  mission_manager | Front/rear obstacle detection |
+| Rear Depth Camera (LIMO 1) | `/limo1/rear_camera/depth/image_raw` |  mission_manager | Rear obstacle distance when reversing (32 FC1 → 5 th percentile) |
+| Front Depth Camera (LIMO 1) | `/limo1/front_camera/depth/image_raw` |  mission_manager | Forward Obstacle Assist Detection |
+| Rear Depth Camera (LIMO 2) | `/limo2/rear_camera/depth/image_raw` |  mission_manager | Rear obstacle distance when leaving the car |
 
-#### 장애물 감지 방식
+#### Obstacle detection method
 
-- **LiDAR 섹터 분석**: `_scan_min_in_range()` — 지정 각도 범위(중심 ± 반각)의 최솟값 추출
-  - 전방: 0° ± 30° → `front_obstacle_m`
-  - 후방: 180° ± 30° → `rear_obstacle_m`
-- **깊이 카메라**: 32FC1 인코딩 → `np.percentile(data, 5)` (하위 5% 거리 = 가장 가까운 장애물)
-- **비상 정지 기준**: 장애물 거리 < 0.18m (`ESTOP_DIST_M`)
+- **LiDAR sector analysis**: `_ scan_min_in_range ()` — Extract the minimum value of a specified angle range (center ± half angle)
+- Front: 0° ± 30° → `front_obstacle_m`
+- Rear: 180° ± 30° → `rear_obstacle_m`
+- **Depth camera**: encode 32 FC1 → `np.percentile(data, 5 )` (subordinate 5% distance = nearest obstacle)
+- **Emergency stop criteria**: Obstacle distance < 0.18m (`ESTOP_DIST_M`)
 
 ---
 
-## 2. LIMO 1 주요 알고리즘
+## 2. Core LIMO1 Algorithms
 
-LIMO 1은 3단계 미션을 수행한다: **후진 회피** → **슬롯 탐지** → **재주차**.
+LIMO 1 performs the 3 level mission: **backward avoidance** → **slot detection** → **repark**.
 
-### 2.1 LIMO1_EVADE: 직선 후진 (이중주차 해제)
+### 2.1 LIMO1_EVADE: Straight Reverse to Clear the Aisle
 
-**목적**: 선택된 차량이 출차할 수 있도록 차로를 따라 후진하여 슬롯 앞 공간 확보.
+**Purpose**: Back up the lane to free up space in front of the slot so the selected vehicle can exit.
 
-**알고리즘**: P 제어 기반 직선 후진
+**Algorithm**: P control based straight backwards
 
 ```
-입력: 현재 위치 (cx, cy), 현재 yaw, 목표 위치 (-0.9, 0.35)
-출력: cmd_vel (linear.x, angular.z)
+Input: current position (cx, cy), current yaw, target position (-0.9, 0.35)
+Output: cmd_vel (linear.x, angular.z)
 
-1. 후방 장애물 확인
-   - rear_obstacle_m < 0.18m → 정지
-   - 1.5초 이상 연속 정지 → 후진 종료 (WAIT_FOR_SELECTION으로 전이)
+1 . Check for rear obstacles
+- rear_obstacle_m < 0.18m → Stop
+- Continuous stop for more than 1.5 seconds → End of reverse (transition to WAIT_FOR_SELECTION)
 
-2. 목표 도달 확인
-   - dist(현재, 목표) < 0.04m → 후진 종료 (WAIT_FOR_SELECTION으로 전이)
+2 . Check if you reached your goal
+- dist(current, target) < 0.04m → End of backward movement (transition to WAIT_FOR_SELECTION)
 
-3. 속도 명령 생성
-   - linear = -0.12 m/s (고정 후진 속도)
-   - yaw_err = 시작 yaw - 현재 yaw
-   - |yaw_err| < 0.03 → 보정 불필요 (데드존)
-   - angular = clip(-1.2 × yaw_err, -0.3, 0.3)   ← P 게인 = 1.2
+3 . Speed ​​command generation
+- linear = -0.12 m/s (fixed reverse speed)
+- yaw_err = start yaw - current yaw
+- | yaw_err | < 0.03 → No correction required (dead zone)
+- angular = clip( -1.2 × yaw_err , -0.3 , 0.3 ) ← P gain = 1.2
 ```
 
-**핵심 포인트**: 시작 시점의 yaw를 기준값으로 잡아 후진 중 차체가 틀어지지 않도록 P 제어로 보정한다.
+**Key point**: Set the yaw at the starting point as a reference value and correct it with P control to prevent the vehicle body from twisting during reverse.
 
-### 2.2 WAIT_FOR_SELECTION: 출차 차량 선택
+### 2.2 WAIT_FOR_SELECTION: Select exit vehicle
 
-**목적**: 사용자가 어떤 차량(A2/A3/A4)을 출차할지 선택하도록 대기한다.
+**Purpose**: Wait for the user to select which vehicle (A2 /A3/A4 ) to exit.
 
-**작동 방식**:
-- 별도 터미널에서 `bash scripts/select_car.sh a3` 실행
-- 스크립트가 `/select_exit_car/a3` 서비스를 호출
-- mission_manager의 `_try_select_car()` 에서 유효성 검증 후 `LIMO2_EXIT_INIT`으로 전이
-- 선택된 차량에 따라 odom/cmd_vel 퍼블리셔가 동적으로 바인딩됨
+**How ​​it works**:
+- Run `bash scripts/select_car.sh a3 ` in a separate terminal.
+- The script calls the `/select_exit_car/a3` service.
+- After validation in `_ try_select_car ()`of mission_manager, transition to` LIMO2_EXIT_INIT `
+- odom /cmd_vel publisher is dynamically bound according to the selected vehicle
 
-| 선택 | Odometry 토픽 | cmd_vel 토픽 | 초기 X 좌표 | 재주차 목표 X |
+| Select | Odometry topics |  cmd_vel Topic | Initial X coordinate | Re-parking goal
 |------|-------------|------------|-----------|-------------|
-| a2 | `/limo_a2/odom` | `/limo_a2/cmd_vel` | -0.225 | -0.225 |
-| a3 | `/limo2/odom` | `/limo2/cmd_vel` | 0.225 | 0.225 |
-| a4 | `/limo_a4/odom` | `/limo_a4/cmd_vel` | 0.675 | 0.675 |
+| a2 | `/limo_a2/odom`|`/limo_a2/cmd_vel` | -0.225 | -0.225 |
+| a3 | `/limo2/odom`|`/limo2/cmd_vel` | 0.225 | 0.225 |
+| a4 | `/limo_a4/odom`|`/limo_a4/cmd_vel` | 0.675 | 0.675 |
 
-### 2.3 LIMO1_SCAN: LiDAR 기반 슬롯 탐지
+### 2.3 LIMO1_SCAN: LiDAR based slot detection
 
-**목적**: 선택된 차량이 떠난 슬롯이 실제로 비었는지 확인하고, 재주차 목표 좌표를 결정한다.
+**Purpose**: Check whether the slot where the selected vehicle left is actually empty and determine the re-parking target coordinates.
 
-**실행 노드**: `dynamic_tracker_node` (별도 노드, mission_manager는 결과만 수신)
+**Execution Node**: `dynamic_tracker_node` (separate node, mission_manager only receives results)
 
-#### 2.3.1 사이드 스캔 투영 (Side Scan Projection)
+#### 2.3. 1 Side Scan Projection
 
 ```
-1. LiDAR에서 +90° ± 8° 범위의 레이 추출 (로봇 좌측)
-2. 차체 자기간섭 구간 (±130°~170°) 마스킹
-3. 각 레이를 odom 프레임으로 변환:
+1 . Li Extract rays from DAR to +90° ± 8° (left side of robot)
+2 . Car body self-interference section (± 130° ~170°) masking
+3 . Convert each ray to an odom frame:
    p_odom = [ego_x, ego_y] + R(ego_yaw) × [range×cos(θ), range×sin(θ)]
-4. 통계 산출:
-   - representative_clearance = 70th 백분위 거리
-   - clear_ratio = (거리 ≥ 0.65m인 레이 수) / (전체 레이 수)
-   - close_count = 거리 ≤ 0.45m인 레이 수
+4 . Statistical output:
+- representative_clearance = 70 th percentile distance
+- clear_ratio = (number of lays with distance ≥ 0.65m) / (total number of lays)
+- close_count = distance ≤ 0.45m number of inlays
 ```
 
-#### 2.3.2 베이스라인 앵커링 (Baseline Anchoring)
+#### 2.3. 2 Baseline Anchoring
 
 ```
-1. 가까운 포인트(≤ 0.75m)가 3개 이상이면 → 점유 물체 감지
-2. 해당 포인트의 평균 위치를 odom 프레임에 앵커링 (baseline_center_odom)
-3. EMA(α=0.2)로 위치를 점진 업데이트
-4. 앵커 주변에 추적 박스(0.35m × 0.30m) 설정
+1 . If there are more than 3 nearby points (≤ 0.75m ) → Occupied object detected
+2 . Anchor the average position of that point into the odom frame (baseline_center_odom)
+3 .  Incrementally update the position to EMA (α= 0.2 )
+4 . Set up a tracking box ( 0.35m × 0.30m ) around the anchor
 ```
 
-#### 2.3.3 클리어런스 판정 (Clearance Evaluation)
+#### 2.3. 3 Clearance Evaluation
 
 ```
-1. 전체 FOV LiDAR를 odom 프레임에 투영 (사이드 윈도우 아님)
-   ※ 전체 FOV를 사용하는 이유: EVADE 중 ego 차량이 이동하면
-      사이드 윈도우만으로는 주차 차량을 놓칠 수 있음
-2. 추적 박스 내 포인트 수(roi_count) 집계
-3. 비어있음 조건:
-   - roi_count ≤ max(2, baseline_roi_count × 0.25)  ← 물체 사라짐
-   - representative_clearance ≥ 0.65m               ← 사이드 개방
-   - clear_ratio ≥ 0.25                              ← 25% 이상 레이가 멀리 감지
-4. 위 조건이 0.70초 연속 유지 → 슬롯 비어있음 확정
+1 . Project entire FOV LiDAR into odom frame (not side window)
+※ Reason for using all FOV: If ego vehicle moves among EVADE,
+Side windows alone can make you miss parked cars
+2 . Count the number of points ( roi_count ) in the tracking box
+3 . Empty condition:
+- roi_count ≤ max( 2 , baseline_roi_count × 0.25 ) ← object disappears
+- representative_clearance ≥ 0.65m ← Side open
+- clear_ratio ≥ 0.25 ← 25% or more rays are detected far away
+4 . The above condition is maintained continuously for 0.70 seconds → slot is confirmed to be empty.
 
-5. 목표 좌표 생성:
-   target = baseline_center + side_unit × 0.30m (슬롯 중심 오프셋)
+5 . Generate target coordinates:
+target = baseline_center + side_unit × 0.30m (slot center offset)
 ```
 
-**Fallback**: 10초 내 `target_slot`을 수신하지 못하면 `repark_goal` 파라미터 좌표 사용 (선택된 슬롯에 따라 동적 결정됨).
+**Fallback**: If `target_slot` is not received within 10 seconds, use `repark_goal` parameter coordinates (dynamically determined depending on the selected slot).
 
-### 2.4 LIMO1_REPARK: Hybrid A* 경로 계획 + 세그먼트별 추종
+### 2.4 LIMO1_REPARK : Hybrid A* path planning + segment-specific tracking
 
-**목적**: 현재 위치에서 빈 슬롯 (goal_x, 0.985, yaw=π/2)까지 전진·후진을 조합하여 주차.
+**Purpose**: Park by combining forward and backward from the current location to an empty slot (goal_x, 0.985, yaw=π /2).
 
-#### 2.4.1 점유 격자 지도 (Occupancy Grid)
-
-```
-범위: x ∈ [-1.5, 1.2], y ∈ [-0.6, 1.7]
-해상도: 0.02m/셀
-장애물:
-  - A0(-1.125), A1(-0.675), A2(-0.225), A3(0.225), A4(0.675) 중
-    출차한 슬롯을 제외한 나머지 → 정적 차량 장애물
-  - 북쪽 벽 (y=1.585), 서쪽 벽 (x=-1.90)
-  - 각 차량 크기: 0.40m × 0.26m (마진 포함)
-```
-
-#### 2.4.2 Hybrid A* 탐색
-
-일반 A*는 격자 기반이라 차량의 비홀로노믹(non-holonomic) 제약을 반영하지 못한다. Hybrid A*는 격자 인덱스로 중복을 제거하면서 실제 차량 운동학에 맞는 연속 상태를 탐색한다.
+#### 2.4. 1 Occupancy Grid
 
 ```
-상태: (x, y, yaw)
-격자 해상도: xy=0.03m, yaw=5°
-조향각: [-30°, -15°, 0°, +15°, +30°] (5단계)
-방향: 전진(+1), 후진(-1)
-스텝 크기: 0.06m/확장
+Range: x ∈ [ -1.5 , 1.2 ], y ∈ [ -0.6 , 1.7 ]
+Resolution: 0.02m/cell
+obstacle:
+- Among A 0 ( -1.125 ), A 1 ( -0.675 ), A2 ( -0.225 ), A3 ( 0.225 ), A4 ( 0.675 )
+Except for exited slots → static vehicle obstacles
+- North wall (y= 1.585 ), West wall (x= -1.90 )
+- Size of each vehicle: 0.40m × 0.26m (including margin)
+```
 
-확장 1회:
+#### 2.4. 2 Hybrid A* navigation
+
+General A* is grid-based, so it does not reflect the non-holonomic constraints of the vehicle. Hybrid A* searches for continuous states that fit the actual vehicle kinematics while removing redundancy with the grid index.
+
+```
+State: (x, y, yaw)
+Grid resolution: xy= 0.03m , yaw= 5°
+Steering angle: [ -30° , -15° , 0° , + 15° , + 30° ](5 steps)
+Direction: forward (+ 1 ), backward ( -1 )
+Step size: 0.06m /expansion
+
+Expansion 1 times:
   nx = x + step × dir × cos(yaw + β/2)
   ny = y + step × dir × sin(yaw + β/2)
   nyaw = yaw + β
-  여기서 β = step × dir × tan(steer) / wheelbase
+Where β = step × dir × tan(steer) / wheelbase
 
-비용 함수:
-  기본 비용 = step (0.06)
-  후진 페널티 = ×2.5
-  조향 페널티 = ×1.1
-  방향 전환 페널티 = +0.3
+Cost function:
+Base cost = step (0.06)
+Reverse Penalty = × 2.5
+Steering Penalty = × 1.1
+Direction penalty = + 0.3
 
-휴리스틱:
-  h = dist(현재, 목표) + 0.5 × min_turn_radius × |yaw_err|
+Heuristic:
+h = dist(current, target) + 0.5 × min_turn_radius × | yaw_err |
 
-충돌 검사:
-  차량 풋프린트 (0.31m × 0.19m) + 마진 (0.02m) 전체를 격자 위에 투영
+Collision check:
+Project the entire vehicle footprint (0.31m × 0.19m) + margin (0.02m) onto the grid.
 
-RS 접속 시도:
-  매 5회 확장마다 현재 노드에서 목표까지 Reeds-Shepp 곡선 연결 시도
-  충돌 없으면 즉시 경로 확정 → 탐색 조기 종료
+RS connection attempt:
+Every 5 expansion, we attempt to connect the Reeds-Shepp curve from the current node to the target.
+If there is no collision, the route is confirmed immediately → Search ends early.
 ```
 
-#### 2.4.3 Reeds-Shepp 곡선
+#### 2.4. 3 Reeds-Shepp curve
 
-전진·후진·회전을 조합하여 두 배치(pose) 사이의 최단 경로를 생성하는 해석적 방법이다.
-
-```
-3가지 기본 공식: LSL, LSR, LRL
-  L = 좌회전, R = 우회전, S = 직진
-
-4가지 변환 (각 공식에 적용):
-  원본:         (x, y, φ)   → 전진
-  시간 반전:    (-x, y, -φ) → 후진
-  반사:         (x, -y, -φ) → L↔R 교체
-  시간반전+반사: (-x,-y, φ) → L↔R 교체 + 후진
-
-= 3 × 4 = 12가지 경로 후보 중 최단 + 충돌 없는 경로 선택
-```
-
-#### 2.4.4 세그먼트별 경로 추종
-
-Hybrid A*가 생성한 경로는 전진/후진 구간이 혼합되어 있다. 이를 동일 방향 세그먼트로 분리하여 순차 추종한다.
+It is an analytical method that creates the shortest path between two poses by combining forward, backward, and rotation.
 
 ```
-경로 = [(x, y, yaw, dir), ...] → 세그먼트 분리 (dir 변경점 기준)
+3 basic formula: LSL , LSR , LRL
+L = turn left, R = turn right, S = go straight
 
-각 세그먼트 추종 (20Hz):
-  1. 현재 위치에서 가장 가까운 웨이포인트 탐색 (인덱스 ±3~20 범위)
-  2. lookahead 거리(0.15m) 이상인 첫 포인트를 목표로 설정
-  3. 목표 방향 계산:
-     - 전진: yaw_err = atan2(dy, dx) - cur_yaw
-     - 후진: yaw_err = atan2(dy, dx) - cur_yaw - π
-  4. 속도 명령:
-     - 전진: 0.08 m/s (슬롯 근접 시 0.03 m/s)
-     - 후진: -0.06 m/s (슬롯 근접 시 -0.03 m/s)
+4 transformations (applied to each formula):
+Original: (x, y, ϕ) → advance
+Time reversal: (-x, y, -ϕ) → backward
+Reflection: (x, -y, -ϕ) → L↔R replacement
+Time inversion + reflection: (-x,-y, ϕ) → L↔R replacement + backward
+
+= 3 × 4 = 12 Shortest + collision-free path selection among path candidates
+```
+
+#### 2.4. 4 Path tracking by segment
+
+The path generated by Hybrid A* is a mixture of forward and backward sections. This is divided into segments in the same direction and followed sequentially.
+
+```
+Path = [(x, y, yaw, dir), ...] → Segment separation (based on dir change point)
+
+Following each segment (20Hz):
+1 . Search for the nearest waypoint from your current location (index ±3 to 20 range)
+2 . Set the target as the first point that is greater than the lookahead distance (0.15m)
+3 . Target direction calculation:
+- Forward: yaw_err = atan 2 (dy, dx) - cur_yaw
+- Backwards: yaw_err = atan 2 (dy, dx) - cur_yaw - π
+4 . Speed ​​command:
+- Forward: 0.08 m/s (0.03 m/s when approaching slot)
+- Reverse: -0.06 m/s (-0.03 m/s when approaching slot)
      - angular = clip(2.0 × yaw_err, -0.8, 0.8)
-     - 최소 회전 반경 제한: |angular| ≤ |speed| / 0.42m
-  5. 세그먼트 끝점 도달(0.06m 이내) → 정지 → 다음 세그먼트로
+- Minimum turning radius limit: |angular| ≤ |speed| /0.42m
+5 . Segment end point reached (within 0.06m) → Stop → Go to next segment
 
-세그먼트 전체 소진 후 → 최종 정렬 단계 진입
+After all segments are exhausted → Enter the final alignment stage
 ```
 
-#### 2.4.5 최종 정렬 (Final Alignment)
+#### 2.4. 5 Final Alignment
 
 ```
-진입 조건: 목표까지 거리 < 0.12m (ALIGN_DIST_ENTER) + 모든 세그먼트 소진
+Entry condition: Distance to target < 0.12m ( ALIGN_DIST_ENTER ) + all segments exhausted
 
-1. 저속 전진: 0.03 m/s (ALIGN_SPEED)
-2. yaw 보정: angular = clip(1.5 × yaw_err, -0.3, 0.3)
-3. 데드존: |yaw_err| < 0.02 → 보정 안 함
+1 . Slow forward speed: 0.03 m/s ( ALIGN_SPEED )
+2 . yaw correction: angular = clip( 1.5 × yaw_err , -0.3 , 0.3 )
+3 . Deadzone: | yaw_err | < 0.02 → No correction
 
-도착 판정:
-  - 위치 오차 < 0.04m (REPARK_ARRIVE)
-  - yaw 오차 < 0.052 rad (~3°, REPARK_YAW_TOL)
-  - 위 조건을 0.8초 연속 유지 → FINISH
+Mission completion decision:
+- Mission completion position criterion: error < 0.04m (`REPARK_ARRIVE`)
+- Mission completion yaw criterion: error < 0.052 rad (~3°, `REPARK_YAW_TOL`)
+- Maintain both criteria continuously for 0.8 seconds → FINISH
 ```
 
-### 2.5 LIMO 1 알고리즘 요약 다이어그램
+### 2.5 LIMO 1 Algorithm summary diagram
 
 ```
 LIMO1_EVADE              WAIT_FOR          LIMO1_SCAN                 LIMO1_REPARK
                          SELECTION
 ┌─────────────┐   ┌──────────────┐  ┌──────────────────────────┐  ┌──────────────────────────┐
-│ P제어 직선   │   │사용자 터미널  │  │ dynamic_tracker_node     │  │ 1. Occupancy Grid 구축   │
-│ 후진        │   │입력 대기     │  │                          │  │ 2. Hybrid A* 탐색        │
-│             │   │             │  │ LiDAR →odom 투영         │  │    (RS 곡선 접속 시도)    │
-│ 후방 장애물  │→  │ a2/a3/a4    │→ │ 베이스라인 앵커링         │→ │ 3. 세그먼트 분리          │
-│ 감지 (LiDAR │   │ 선택        │  │ 추적 박스 ROI 집계        │  │ 4. 구간별 Pure Pursuit    │
-│ + 깊이 카메라)│   │             │  │ 0.70s 유지 → 슬롯 확정   │  │ 5. 최종 정렬 (P제어)     │
-│             │   │ select_car  │  │                          │  │ 6. 0.8s 유지 → 완료      │
-│ 속도: -0.12 │   │ .sh 서비스  │  │ → /limo1/target_slot     │  │                          │
-│ m/s         │   │ 호출        │  │   발행                   │  │ 속도: ±0.08 (→0.03) m/s  │
+│ P control straight line │ │ User terminal │ │ dynamic_tracker_node │ │ 1 . Establishment of Occupancy Grid │
+│ Reverse │ │Wait for input │ │ │ │ 2 . Hybrid A* navigation │
+│ │ │ │ │ LiDAR →odom projection │ │ (try to connect RS curve) │
+│ Rear obstacle │→ │ a2 /a3/a4 │→ │ Baseline anchoring │→ │ 3 . Segment separation │
+│ Detect (LiDAR │ │ Select │ │ Tracking box ROI Aggregate │ │ 4. Pure Pursuit by section │
+│ + depth camera)│ │ │ │ Maintain 0.70s → Confirm slot │ │ 5 . Final alignment (P control) │
+│ │ │ select_car │ │ │ │ 6 .  Maintain 0.8s → Complete │
+│ Speed: -0.12 │ │ .sh service │ │ → /limo1/target_slot │ │ │
+│ m/s │ │ Call │ │ Issue │ │ Speed: ± 0.08 (→ 0.03 ) m/s │
 └─────────────┘   └──────────────┘  └──────────────────────────┘  └──────────────────────────┘
 ```
 
 ---
 
-## 3. LIMO 2 주요 알고리즘
+## 3. Core Exit-Vehicle Algorithm
 
-선택된 차량(A2/A3/A4 중 하나)은 단일 미션을 수행한다: 해당 슬롯에서 **출차**.
+The selected vehicle (one of A2 /A3/A4) performs a single mission: **Exit** from its slot.
 
-### 3.1 출차 경로 생성 (Sinusoidal Waypoint Generation)
+### 3.1 Exit path generation (Sinusoidal Waypoint Generation)
 
-**목적**: 슬롯(-Y 방향)에서 시작하여 남쪽으로 빠진 뒤 동쪽(+X)으로 빠져나가는 부드러운 출차 경로를 생성한다. 시작 X 좌표는 선택된 차량에 따라 동적으로 결정된다.
+**Purpose**: Create a smooth exit path starting from the slot (-Y direction), exiting south, and then east (+X). The starting X coordinate is determined dynamically depending on the selected vehicle.
 
 ```
-시작 배치: (start_x, 0.985, yaw=-π/2)
+Starting batch: ( start_x , 0.985 , yaw=-π /2 )
   start_x = -0.225 (A2), 0.225 (A3), 0.675 (A4)
-속도: 0.20 m/s (일정)
-시뮬레이션 dt: 0.01s
-웨이포인트 간격: 0.08m
+Speed: 0.20 m/s (constant)
+Simulation dt: 0.01s
+Waypoint interval: 0.08m
 
-Phase 1 (0~2.5s): 직진 — 슬롯 탈출
+Phase 1 ( 0 ~2.5s ): Straight ahead — exit slot
   ω = 0
-  → 남쪽(-Y)으로 0.5m 이동
+→ Move 0.5m to the south (-Y)
 
-Phase 2 (2.5~6.5s): Sinusoidal 곡선 — 방향 전환
+Phase 2 ( 2.5 ~6.5s ): Sinusoidal curve — change direction
   tc = t - 2.5
   ω(tc) = (π² / 4T) × sin(π × tc / T),  T = 4.0s
-  → 총 회전량 = π/2 (90°, 남→동 방향 전환)
-  → 가속도 연속인 부드러운 S자 회전
+→ Total rotation amount = π /2 (90°, south → east direction change)
+→ Smooth S-shaped rotation with continuous acceleration
 
-Phase 3 (6.5~10.5s): 직진 — 동쪽으로 탈출
+Phase 3 ( 6.5 ~10.5s ): Go straight — escape to the east
   ω = 0
-  → 동쪽(+X)으로 0.8m 이동
+→ Move 0.8m to the east (+X)
 
-각 스텝:
+Each step:
   yaw += ω × dt
   x += speed × cos(yaw) × dt
   y += speed × sin(yaw) × dt
-  0.08m 이상 이동마다 웨이포인트 기록
+Record waypoints for every move over 0.08m
 ```
 
-**Sinusoidal 프로파일을 사용하는 이유**: 일반적인 일정 각속도 회전은 곡선 시작/끝에서 각가속도가 불연속이다. Sinusoidal 프로파일(`sin(π·t/T)` 형태)은 시작과 끝에서 ω=0이 되어 각가속도가 연속적이며, Ackermann 조향의 물리적 한계에 맞는 부드러운 전환을 보장한다.
+**Why use a sinusoidal profile**: A typical constant angular velocity rotation has discontinuities in angular acceleration at the start/end of the curve. The sinusoidal profile (of the form `sin(π·t /T )`) has ω= 0 at the start and end, ensuring continuous angular acceleration and smooth transitions that meet the physical limits of Ackermann steering.
 
-### 3.2 Pure Pursuit 경로 추종
+### 3.2 Pure Pursuit Path Following
 
-**목적**: 생성된 웨이포인트 리스트를 추종하여 실제 차량을 이동시킨다.
+**Purpose**: Move the actual vehicle by following the created waypoint list.
 
 ```
-파라미터:
+Parameters:
   Wheelbase    = 0.24m
   Lookahead    = 0.25m
   Max Steering = 30° (0.5236 rad)
-  도착 허용 오차 = 0.12m
+Arrival tolerance = 0.12m
 
-매 제어 주기 (20Hz):
-  1. 현재 위치에서 가장 가까운 웨이포인트 탐색
-  2. 가장 가까운 점부터 순방향으로 순회하며
-     거리 ≥ Lookahead(0.25m)인 첫 포인트를 lookahead 포인트로 설정
-  3. lookahead 포인트를 로봇 로컬 좌표로 변환:
+Every control cycle (20Hz):
+1 . Navigate to the nearest waypoint from your current location
+2 . It moves forward starting from the closest point.
+Set the first point with distance ≥ Lookahead ( 0.25m ) as the lookahead point.
+3 . Convert the lookahead point to robot local coordinates:
      dx = target_x - cx
      dy = target_y - cy
      local_x =  cos(yaw) × dx + sin(yaw) × dy
      local_y = -sin(yaw) × dx + cos(yaw) × dy
-  4. 곡률 계산:
+4 . Curvature calculation:
      ld = sqrt(local_x² + local_y²)
      curvature = 2 × local_y / ld²
-  5. 조향각 계산:
+5 . Steering angle calculation:
      δ = atan(wheelbase × curvature)
      δ = clip(δ, -30°, +30°)
-  6. 속도 명령:
+6 . Speed ​​command:
      linear  = 0.20 m/s
      angular = linear × tan(δ) / wheelbase
-  7. 종료 판정:
-     - 최종 웨이포인트까지 거리 < 0.12m → 출차 완료
-     - 경과 시간 > 30s → 타임아웃 종료
+7 . End verdict:
+- Distance to final waypoint < 0.12m → Completed exit
+- Elapsed time > 30s → Timeout ends
 ```
 
-### 3.3 출차 흐름 요약
+### 3.3 Summary of exit flow
 
 ```
 WAIT_FOR_SELECTION                LIMO2_EXIT_INIT                    LIMO2_EXITING
 ┌─────────────────────┐   ┌────────────────────────────┐     ┌────────────────────────────────┐
-│ 사용자 차량 선택     │   │ sinusoidal 웨이포인트 생성  │     │ Pure Pursuit 추종 (20Hz)       │
-│ a2/a3/a4 중 택1     │   │                            │     │                                │
-│                     │   │ Phase 1: 직진 남쪽 (2.5s)  │     │ 1. nearest waypoint 탐색       │
-│ → odom/cmd_vel      │→  │ Phase 2: S곡선 (4.0s)      │ ──→ │ 2. lookahead point (≥0.25m)    │
-│   동적 바인딩       │   │ Phase 3: 직진 동쪽 (4.0s)  │     │ 3. 곡률 → 조향각 → cmd_vel    │
-│ → repark_goal       │   │                            │     │ 4. 도착 or 타임아웃 → 종료     │
-│   동적 업데이트      │   │ ≈26개 웨이포인트 생성       │     │                                │
-│                     │   │ (0.08m 간격)               │     │ 속도: 0.20 m/s                 │
+│ Select user vehicle │ │ Create sinusoidal waypoint │ │ Follow Pure Pursuit (20Hz) │
+│ a Choose between 2 /a3/a4 1 │ │ │ │ │
+│ │ │ Phase 1: Straight south (2.5s) │ │ 1. Nearest waypoint navigation │
+│ → odom /cmd_vel │→ │ Phase 2 : S curve ( 4.0s ) │ ──→ │ 2 . lookahead point (≥ 0.25m ) │
+│ Dynamic Binding │ │ Phase 3: Straight East (4.0s) │ │ 3. Curvature → Steering angle → cmd_vel │
+│ → repark_goal │ │ │ │ 4 . Arrival or timeout → End │
+│ Dynamic update │ │ ≈ Create 26 waypoints │ │ │
+│ │ │ (0.08m interval) │ │ Speed: 0.20 m/s │
 └─────────────────────┘   └────────────────────────────┘     └────────────────────────────────┘
 ```
 
 ---
 
-## 부록: 주요 파라미터 일람
+## Appendix: Key Parameters
 
-### 차량 물리 사양 (공통)
+### Vehicle physics specifications (common)
 
-| 파라미터 | 값 | 단위 |
+| parameters | value | Unit |
 |---------|-----|------|
-| 질량 | 4.34 | kg |
-| 차체 크기 | 0.31 × 0.19 × 0.12 | m (L×W×H) |
-| 바퀴 반경 | 0.045 | m |
-| 휠베이스 | 0.24 | m |
-| 최소 회전 반경 | 0.42 | m |
-| 최대 조향각 | 30° | deg |
+| mass |  4.34 | kg |
+| car body size |  0.31 × 0.19 × 0.12 | m (L×W×H) |
+| wheel radius |  0.045 | m |
+| Wheelbase |  0.24 | m |
+| Minimum turning radius |  0.42 | m |
+| maximum steering angle |  30° | deg |
 
-### mission_manager 주요 상수
+### mission_manager Key constants
 
-| 상수 | 값 | 용도 |
+| constant | value | Use |
 |-----|-----|------|
-| `CTRL_HZ` | 20 Hz | 제어 루프 주기 |
-| `ESTOP_DIST_M` | 0.18 m | 비상 정지 장애물 거리 |
-| `EVADE_SPEED` | -0.12 m/s | LIMO 1 후진 속도 |
-| `EVADE_YAW_KP` | 1.2 | 후진 yaw P 게인 |
-| `LIMO2_EXIT_SPEED` | 0.20 m/s | 출차 속도 |
-| `LIMO2_LOOKAHEAD` | 0.25 m | 출차 Pure Pursuit lookahead |
-| `LIMO2_ARRIVE_TOL` | 0.12 m | 출차 도착 허용 오차 |
-| `REPARK_FWD_SPEED` | 0.08 m/s | 재주차 전진 속도 |
-| `REPARK_BWD_SPEED` | -0.06 m/s | 재주차 후진 속도 |
-| `REPARK_LOOKAHEAD` | 0.15 m | 재주차 lookahead |
-| `REPARK_ARRIVE` | 0.04 m | 재주차 도착 허용 오차 |
-| `REPARK_YAW_TOL` | 0.052 rad (~3°) | 재주차 yaw 허용 오차 |
-| `REPARK_HOLD_S` | 0.8 s | 도착 확인 유지 시간 |
-| `SCAN_TIMEOUT_S` | 10.0 s | 슬롯 스캔 타임아웃 |
-| `ALIGN_SPEED` | 0.03 m/s | 최종 정렬 저속 |
-| `ALIGN_YAW_KP` | 1.5 | 최종 정렬 yaw P 게인 |
+| `CTRL_HZ` |  20 Hz | Control loop cycle |
+| `ESTOP_DIST_M` |  0.18 m | Emergency stop obstacle distance |
+| `EVADE_SPEED` |  -0.12 m/s |  LIMO 1 Reverse speed |
+| `EVADE_YAW_KP` |  1.2 | Reverse yaw P gain |
+| `LIMO2_EXIT_SPEED` |  0.20 m/s | exit speed |
+| `LIMO2_LOOKAHEAD` |  0.25 m | Departure Pure Pursuit lookahead |
+| `LIMO2_ARRIVE_TOL` |  0.12 m | Departure/arrival tolerance |
+| `REPARK_FWD_SPEED` |  0.08 m/s | Re-parking forward speed |
+| `REPARK_BWD_SPEED` |  -0.06 m/s | Re-parking reverse speed |
+| `REPARK_LOOKAHEAD` |  0.15 m | repark lookahead |
+| `REPARK_ARRIVE` |  0.04 m | Re-parking arrival tolerance |
+| `REPARK_YAW_TOL` |  0.052 rad (~3° ) | Repark yaw tolerance |
+| `REPARK_HOLD_S` |  0.8 s | Arrival confirmation holding time |
+| `SCAN_TIMEOUT_S` |  10.0 s | slot scan timeout |
+| `ALIGN_SPEED` |  0.03 m/s | Final Sort Timelapse |
+| `ALIGN_YAW_KP` |  1.5 | final alignment yaw P gain |
 
-### dynamic_tracker_node 주요 파라미터
+### dynamic_tracker_node main parameters
 
-| 파라미터 | 값 | 용도 |
+| parameters | value | Use |
 |---------|-----|------|
-| `side_scan_center_deg` | 90° | 사이드 스캔 중심 (좌측) |
-| `side_scan_half_deg` | 8° | 사이드 스캔 반각 |
-| `occupied_distance_m` | 0.45 m | 점유 판정 거리 |
-| `clear_distance_m` | 0.65 m | 개방 판정 거리 |
-| `baseline_capture_distance_m` | 0.75 m | 베이스라인 캡처 거리 |
-| `clear_hold_s` | 0.70 s | 개방 상태 유지 시간 |
-| `slot_center_offset_m` | 0.30 m | 슬롯 중심 오프셋 |
-| `track_box_length_m` | 0.35 m | 추적 박스 전후 길이 |
-| `track_box_width_m` | 0.30 m | 추적 박스 좌우 폭 |
-| `side_percentile` | 70% | 대표 거리 백분위 |
-| `min_clear_ratio` | 0.25 | 최소 개방 비율 |
+| `side_scan_center_deg` |  90° | Side scan center (left) |
+| `side_scan_half_deg` |  8° | side scan half width |
+| `occupied_distance_m` |  0.45 m | Possession Judgment Distance |
+| `clear_distance_m` |  0.65 m | Open Judgment Distance |
+| `baseline_capture_distance_m` |  0.75 m | Baseline Capture Distance |
+| `clear_hold_s` |  0.70 s | Time to remain open |
+| `slot_center_offset_m` |  0.30 m | Slot Center Offset |
+| `track_box_length_m` |  0.35 m | Length before and after tracking box |
+| `track_box_width_m` |  0.30 m | Tracking box left/right width |
+| `side_percentile` |  70% | Representative distance percentile |
+| `min_clear_ratio` |  0.25 | Minimum open rate |
 
-### Hybrid A* 플래너 파라미터
+### Hybrid A* planner parameters
 
-| 파라미터 | 값 | 용도 |
+| parameters | value | Use |
 |---------|-----|------|
-| XY 해상도 | 0.03 m | 격자 인덱싱 |
-| Yaw 해상도 | 5° | 격자 인덱싱 |
-| 스텝 크기 | 0.06 m | 노드 확장 거리 |
-| 조향각 | [-30°, -15°, 0°, +15°, +30°] | 확장 방향 |
-| RS 접속 시도 간격 | 5회 | 매 5회 확장마다 |
-| 후진 비용 배수 | 2.5× | 전진 대비 |
-| 조향 비용 배수 | 1.1× | 직진 대비 |
-| 방향 전환 비용 | +0.3 | 전진↔후진 전환 |
-| 충돌 마진 | 0.02 m | 차체 주변 여유 |
-| 최대 반복 | 80,000회 | 탐색 상한 |
+| XY resolution |  0.03 m | grid indexing |
+| Yaw resolution |  5° | grid indexing |
+| step size |  0.06 m | Node extension distance |
+| Steering angle | [ -30° , -15° , 0° , + 15° , + 30° ] | Expansion direction |
+| RS connection attempt interval |  5 times | Every 5 expansion |
+| Backward Cost Multiple |  2.5 × | Prepare for advance |
+| Steering Cost Multiple |  1.1 × | Compared to going straight |
+| Cost of redirection | + 0.3 | Forward↔Backward conversion |
+| crash margin |  0.02 m | Clearance around bodywork |
+| Maximum iterations |  80 , 000 times | Exploration upper limit |

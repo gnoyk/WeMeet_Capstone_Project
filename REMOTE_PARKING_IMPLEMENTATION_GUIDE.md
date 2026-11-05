@@ -1,102 +1,102 @@
-# 원격 자율 주차 시스템 — 코딩 에이전트 구현 가이드
+# Remote Autonomous Parking System — Coding Agent Implementation Guide
 
-> **목적**: 이 문서 하나로 전체 시스템을 처음부터 구현·디버깅할 수 있도록 작성됨.  
-> **플랫폼**: AgileX LIMO Pro · ROS 2 Humble · Gazebo Classic 11 · Ubuntu 22.04
-
----
-
-## 1. 시나리오 & 목표
-
-```
-[초기 상태]
-  LIMO 1 (사용자 차) ── 차로에서 LIMO 2 앞 이중주차 (차로 막음)
-  LIMO 2 (상대 차)  ── A3 슬롯에 정상 주차 (LIMO 1에 막혀 출차 불가)
-
-[사용자 버튼 1회 누름]  ──→  ros2 service call /start_remote_parking
-
-  ① LIMO 1 후진 (B3 슬롯으로 후진, 차로 개방)
-  ② LIMO 2 자율 출차 (차로 → 출구, 웨이포인트 P제어)
-  ③ LIMO 1이 LiDAR로 빈 슬롯(A3) 감지
-  ④ LIMO 1 A3 재주차 (3단계 FSM)
-  ⑤ 완료 — 양 로봇 정지
-```
-
-**핵심 제약**
-- 원격 버튼: ROS2 서비스 호출로 시뮬
-- 카메라 스트리밍: 불필요
-- 슬롯 탐지: LiDAR(동적) + 후방 Depth 카메라(보조)
-- 시뮬레이터 빠른 기동: Gazebo 1회 시작 후 로봇만 리셋
+> **Purpose**: This document was written so that the entire system can be implemented and debugged from scratch with one document.
+> **Platform**: AgileX LIMO Pro · ROS 2 Humble · Gazebo Classic 11 · Ubuntu 22.04
 
 ---
 
-## 2. 전제 조건 (사전 준비)
-
-### 필수 워크스페이스 (이미 존재해야 함)
+## 1. Scenario & Goal
 
 ```
-~/parking_ws/          ← parking_ws 레포
+[Initial state]
+LIMO 1 (your car) ── Double parking in front of LIMO 2 in the lane (blocking the lane)
+LIMO 2 (Opponent car) ── A Normal parking in 3 slot (unable to exit due to blockage at LIMO 1)
+
+[Press user button 1 times] ──→ ros 2 service call /start_remote_parking
+
+① LIMO 1 reverse (reverse to slot B 3, open lane)
+② LIMO 2 Autonomous exit (lane → exit, waypoint P control)
+③ LIMO 1 detects an empty slot (A3) with LiDAR
+④ LIMO 1 A3 reparking (3 step FSM)
+⑤ Done — Both robots stop
+```
+
+**Key Constraints**
+- Remote Button: Simulate with ROS2 service call
+- Camera streaming: not required
+- Slot detection: LiDAR (dynamic) + rear depth camera (auxiliary)
+- Quick startup of the simulator: Gazebo 1 starts once and then resets only the robot
+
+---
+
+## 2. Prerequisites
+
+### Required workspace (must already exist)
+
+```
+~/parking_ws/ ← parking_ws repo
   src/
     limo_car/          ← URDF + Gazebo xacro
-    limo_gazebosim/    ← 기존 월드 파일
+limo_gazebosim / ← Existing world file
     my_valet_parking/  ← dynamic_tracker_node, limo_valet_parking_node
 
-~/LIMO_platform/       ← LIMO_platform 레포
+~/LIMO_platform/ ← LIMO_platform repo
   src/
-    wego_2d_nav/       ← Nav2 파라미터
+wego_2d_nav / ← Nav 2 parameters
     robot_localization/← EKF
 ```
 
-### limo_car 패키지 디렉토리 구조 확인
+### Check limo_car package directory structure
 
 ```
 limo_car/
 ├── urdf/
-│   ├── limo_ackerman_base.xacro      ← base_footprint 주석처리됨, root=base_link
+│ ├── limo_ackerman_base.xacro ← base_footprint commented out, root= base_link
 │   ├── limo_anteil.xacro
 │   └── limo_steering_hinge.xacro
-├── gazebo/                           ★ Gazebo 플러그인은 이 디렉토리
-│   ├── ackermann_with_sensor.xacro   ← include 대상 (sensor.xacro + ackermann.xacro)
-│   ├── ackermann.xacro               ← 드라이브 플러그인
-│   └── sensor.xacro                  ← LiDAR/카메라/IMU 플러그인
+├── gazebo/ ★ Gazebo plugin is located in this directory
+│ ├── ackermann_with_sensor.xacro ← include target (sensor.xacro + ackermann.xacro)
+│ ├── ackermann.xacro ← Drive Plug-in
+│ └── sensor.xacro ← LiDAR /Camera /IMU plug-in
 └── launch/
-    └── ackermann.launch.py           ← gazebo/ackermann_with_sensor.xacro 로드
+└── ackermann.launch.py ← gazebo/ackermann_with_sensor.xacro load
 ```
 
-### URDF 핵심 수치 (ackermann.xacro 기준)
+### URDF Key figures (based on ackermann.xacro)
 
-| 항목 | 값 | 비고 |
+| Item | value | Remarks |
 |------|----|------|
-| root link | `base_link` | base_footprint 주석 처리됨 |
-| wheel_vertical_offset | `-0.10 m` | base_link 기준 바퀴 중심 z |
+| root link | `base_link` |  base_footprint commented out |
+|  wheel_vertical_offset | `-0.10 m` |  base_link reference wheel center z |
 | wheel_radius | `0.045 m` | |
-| **spawn z** | **`0.145 m`** | 바퀴 하단이 z=0에 닿는 값 |
+| **spawn z** | **` 0.145 m`** | The value at which the bottom of the wheel touches z= 0 |
 | wheelbase | `0.24 m` | |
 | track | `0.168 m` | |
-| cmd_vel 토픽 | `cmd_vel` (상대) | spawn -robot_namespace 로 namespacing |
-| odom 토픽 | `odom` (상대) | |
-| scan 토픽 | `~/out → scan` | namespace=/ 이나 spawn이 override |
+|  cmd_vel Topic | `cmd_vel` (Opponent) | spawn - namespacing as robot_namespace |
+| odom topic | `odom` (relative) | |
+| scan topic | `~ /out → scan` | namespace=/ or spawn override |
 
-### Gazebo 센서 토픽 (spawn -robot_namespace limo1 기준)
+### Gazebo sensor topic (spawn - based on robot_namespace limo 1)
 
-| 센서 | 토픽 |
+| sensor | Topic |
 |------|------|
 | LiDAR | `/limo1/scan` |
 | Depth (RGB) | `/limo1/rgb/image_raw` |
-| Depth (깊이) | `/limo1/depth/image_raw` |
-| 후방 카메라 (신규) | `/limo1/rear_camera/depth/image_raw` |
-| IMU | `/limo/imu` (**하드코딩**, 두 로봇 공유) |
+| Depth | `/limo1/depth/image_raw` |
+| Rear Camera (New) | `/limo1/rear_camera/depth/image_raw` |
+|  IMU | `/limo/imu` (**hardcoded**, shared by two robots) |
 | Odometry | `/limo1/odom` |
-| cmd_vel 수신 | `/limo1/cmd_vel` |
+|  cmd_vel received | `/limo1/cmd_vel` |
 
 ---
 
-## 3. 새 워크스페이스 구조
+## 3. Workspace Structure
 
 ```
 ~/remote_parking_ws/
 ├── README.md
 └── src/
-    ├── remote_parking_world/          ← Gazebo 월드 + 스폰 launch
+├── remote_parking_world / ← Gazebo World + Spawn launch
     │   ├── package.xml
     │   ├── CMakeLists.txt
     │   ├── worlds/
@@ -104,11 +104,11 @@ limo_car/
     │   ├── urdf/
     │   │   └── limo_with_rear_camera.urdf.xacro
     │   ├── launch/
-    │   │   ├── world_server.launch.py   ← 1회만 실행
-    │   │   └── spawn_robots.launch.py   ← 테스트마다 실행
+│ │ ├── Run only world_server.launch.py ← 1 times
+│ │ └── spawn_robots.launch.py ← Run each test
     │   └── scripts/
-    │       └── reset_robots.sh          ← 빠른 리셋 (~0.5초)
-    └── remote_parking_manager/         ← 미션 마스터 FSM
+│ └── reset_robots.sh ← Fast reset (~0.5 seconds)
+└── remote_parking_manager / ← Mission Master FSM
         ├── package.xml
         ├── setup.py
         ├── setup.cfg
@@ -120,96 +120,96 @@ limo_car/
 
 ---
 
-## 4. 핵심 아키텍처
+## 4. Core Architecture
 
-### 2단계 Launch 분리 (시뮬레이터 속도 최적화)
+### 2 Stage Launch Separation (Simulator Speed ​​Optimization)
 
 ```
-[1회 실행]   world_server.launch.py
-               gzserver + 정적 월드 로드 (주차장 + 정적 차량 7대)
-               → Gazebo 프로세스 유지, 재시작 없음
+[Run 1 times] world_server.launch.py
+gzserver + static world load (parking lot + static vehicles 7)
+→ Maintain Gazebo process, no restart
 
-[매 테스트]  spawn_robots.launch.py
-               LIMO 1·2 스폰 + 모든 ROS2 노드 시작
-               타이밍: RSP(0s) → 스폰(3s) → 제어노드(5s) → FSM(6s)
+[Every test] spawn_robots.launch.py
+LIMO 1 · 2 spawn + start all ROS2 nodes
+Timing: RSP ( 0s ) → Spawn ( 3s ) → Control node ( 5s ) → FSM ( 6s )
 
-[리셋]       bash reset_robots.sh teleport
-               set_entity_state로 위치만 이동 (~0.5초)
-               Gazebo 재시작 없음
+[reset] bash reset_robots.sh teleport
+Move only the position to set_entity_state (~0.5 seconds)
+No Gazebo restart
 ```
 
-### FSM 상태 전이
+### FSM state transition
 
 ```
 IDLE
-  │ /start_remote_parking 서비스 수신
+│ Receive /start_remote_parking service
   ▼
-LIMO1_EVADE        ── LIMO 1 후진 (0.225,0) → (0.225,-0.985) [B3 슬롯]
-  │ 후진 완료 (오도메트리 기준 도달)
+LIMO1_EVADE ── LIMO 1 backward ( 0.225 , 0 ) → ( 0.225 , -0.985 ) [B 3 slot]
+│ Retraction complete (odometry standard reached)
   ▼
-LIMO2_EXIT_INIT    ── LIMO 2 웨이포인트 초기화
-  │ 즉시 전환
+LIMO2_EXIT_INIT ── LIMO 2 Waypoint reset
+│ Instant conversion
   ▼
-LIMO2_EXITING      ── LIMO 2 출차 P제어 (4개 웨이포인트)
-  │ 모든 웨이포인트 완료
+LIMO2_EXITING ── LIMO 2 exit P control (4 waypoints)
+│ Complete all waypoints
   ▼
-LIMO1_SCAN         ── LiDAR로 A3 슬롯 비어있음 확인
-  │ target_slot 수신 OR 타임아웃(10s) → fallback 사용
+LIMO1_SCAN ── Confirm that A3 slot is empty with LiDAR
+│ Receive target_slot OR timeout (10s) → Use fallback
   ▼
 LIMO1_REPARK       ── APPROACH → ARC_TURN → PRECISION
-  │ 정밀 주차 완료 (yaw<1°, x_err<8mm, 0.6s 유지)
+│ Precision parking completed (yaw < 1° , x_err < 8mm , 0.6s maintained)
   ▼
-FINISH             ── 양 로봇 정지
+FINISH ── Both robots stop
 ```
 
-### 패키지 역할 분담
+### Division of package roles
 
-| 기능 | 출처 | 파일 |
+| Features | Source | file |
 |------|------|------|
-| URDF + Gazebo 플러그인 | `parking_ws/limo_car` | `gazebo/ackermann_with_sensor.xacro` |
-| 후방 카메라 추가 | **신규** | `remote_parking_world/urdf/limo_with_rear_camera.urdf.xacro` |
-| Gazebo 월드 | **신규** | `remote_parking_world/worlds/remote_parking_static.world` |
-| LiDAR 슬롯 탐지 | `parking_ws/my_valet_parking` | `dynamic_tracker_node.py` |
-| 미션 FSM | **신규** | `remote_parking_manager/mission_manager.py` |
+|  URDF + Gazebo plugin | `parking_ws /limo_car` | `gazebo/ackermann_with_sensor.xacro` |
+| Add rear camera | **New** | `remote_parking_world/urdf/limo_with_rear_camera.urdf.xacro` |
+| Gazebo World | **New** | `remote_parking_world /worlds/remote_parking_static.world` |
+| LiDAR slot detection | `parking_ws /my_valet_parking` | `dynamic_tracker_node.py` |
+| Mission FSM | **New** | `remote_parking_manager/mission_manager.py` |
 
 ---
 
-## 5. 주차장 월드 설계 (법령 기준 1/5.6 축척)
+## 5. Parking lot world design (scale 1 /5.6 by law)
 
 ```
-실제 슬롯: 2.5m × 5.0m  →  Gazebo: 0.45m × 0.90m
-실제 차로: 6.0m          →  Gazebo: 1.07m
-LIMO 크기:               →  0.34m(W) × 0.78m(L)
+Real slot: 2.5m × 5.0m → Gazebo: 0.45m × 0.90m
+Actual car: 6.0m → Gazebo: 1.07m
+LIMO Size: → 0.34m (W) × 0.78m (L)
 
-[월드 Top-view]                    +Y (북)
+[World Top-view] +Y (North)
 
   North wall ────────────────────── Y = +1.585
   [A1:red][A2:blue][A3:LIMO2][A4:silver]  Y = +0.985
   Lane edge ───────────────────────  Y = +0.535
               LANE (center Y=0)
-              ← LIMO 1 이중주차 →
+← LIMO 1 double parking →
   Lane edge ───────────────────────  Y = -0.535
   [B1:yel][B2:grn][B3:empty][B4:ora]      Y = -0.985
   South wall ────────────────────── Y = -1.585
 
-  West wall X=-0.95         출구 → +X
+West wall X= -0.95 exit → +X
 
-슬롯 X 좌표: A1/B1=-0.675, A2/B2=-0.225, A3/B3=+0.225, A4/B4=+0.675
-A3, B3: 정적 모델 없음 (LIMO 1·2 스폰 위치)
+Slot
+A3, B 3: No static model (LIMO 1 · 2 spawn location)
 ```
 
-### 초기 스폰 포즈
+### Initial spawn pose
 
-| 로봇 | x | y | z | yaw |
+| robot | x | y | z | yaw |
 |------|---|---|---|-----|
 | LIMO 1 | 0.225 | 0.0 | **0.145** | +π/2 |
 | LIMO 2 | 0.225 | 0.985 | **0.145** | -π/2 |
 
-> z=0.145 근거: base_link root, wheel_vertical_offset=-0.10, wheel_radius=0.045 → 바퀴 하단 = spawn_z - 0.145 = 0
+> z= 0.145 Ground: base_link root, wheel_vertical_offset = -0.10 , wheel_radius = 0.045 → Bottom of wheel = spawn_z - 0.145 = 0
 
 ---
 
-## 6. 전체 구현 파일
+## 6. Implementation Files
 
 ### 6-1. `remote_parking_world/package.xml`
 
@@ -261,7 +261,7 @@ ament_package()
 <sdf version="1.6">
   <world name="remote_parking">
 
-    <!-- 물리 최적화: 1000Hz→500Hz, quick solver, 그림자OFF -->
+<!-- Physics optimization: 1000Hz → 500Hz , quick solver, shadow OFF -->
     <physics name="default_physics" default="true" type="ode">
       <max_step_size>0.002</max_step_size>
       <real_time_factor>1.0</real_time_factor>
@@ -281,14 +281,14 @@ ament_package()
       </ode>
     </physics>
 
-    <!-- ROS2 플러그인 -->
+<!-- ROS2 plugin -->
     <plugin name="gazebo_ros_factory" filename="libgazebo_ros_factory.so"/>
     <plugin name="gazebo_ros_state" filename="libgazebo_ros_state.so">
       <ros><namespace>/</namespace></ros>
       <update_rate>10.0</update_rate>
     </plugin>
 
-    <!-- 조명 (그림자 OFF) -->
+<!-- Light (Shadow OFF ) -->
     <light name="sun" type="directional">
       <cast_shadows>false</cast_shadows>
       <pose>0 0 10 0 0 0</pose>
@@ -301,7 +301,7 @@ ament_package()
       <direction>-0.5 0.1 -0.9</direction>
     </light>
 
-    <!-- 지면 -->
+<!-- Ground -->
     <model name="ground_plane">
       <static>true</static>
       <link name="link">
@@ -317,7 +317,7 @@ ament_package()
       </link>
     </model>
 
-    <!-- 아스팔트 -->
+<!-- Asphalt -->
     <model name="parking_asphalt">
       <static>true</static>
       <pose>0.05 0 0.001 0 0 0</pose>
@@ -331,7 +331,7 @@ ament_package()
       </link>
     </model>
 
-    <!-- 북쪽 벽 -->
+<!-- North Wall -->
     <model name="wall_north">
       <static>true</static><pose>0.05 1.585 0.10 0 0 0</pose>
       <link name="link">
@@ -343,7 +343,7 @@ ament_package()
       </link>
     </model>
 
-    <!-- 남쪽 벽 -->
+<!-- South Wall -->
     <model name="wall_south">
       <static>true</static><pose>0.05 -1.585 0.10 0 0 0</pose>
       <link name="link">
@@ -355,7 +355,7 @@ ament_package()
       </link>
     </model>
 
-    <!-- 서쪽 벽 -->
+<!-- Western Wall -->
     <model name="wall_west">
       <static>true</static><pose>-0.95 0 0.10 0 0 0</pose>
       <link name="link">
@@ -367,7 +367,7 @@ ament_package()
       </link>
     </model>
 
-    <!-- 차로 경계선 북 Y=+0.535 -->
+<!-- Lane border north Y=+ 0.535 -->
     <model name="line_lane_north"><static>true</static><pose>0.05 0.535 0.003 0 0 0</pose>
       <link name="link">
         <collision name="collision"><geometry><box><size>1.80 0.02 0.002</size></box></geometry></collision>
@@ -377,7 +377,7 @@ ament_package()
       </link>
     </model>
 
-    <!-- 차로 경계선 남 Y=-0.535 -->
+<!-- South of lane boundary Y= -0.535 -->
     <model name="line_lane_south"><static>true</static><pose>0.05 -0.535 0.003 0 0 0</pose>
       <link name="link">
         <collision name="collision"><geometry><box><size>1.80 0.02 0.002</size></box></geometry></collision>
@@ -387,7 +387,7 @@ ament_package()
       </link>
     </model>
 
-    <!-- Row A 슬롯 구획선 5개 (X = -0.90 ~ +0.90) -->
+<!-- Row A slot partition line 5 (X = -0.90 ~ + 0.90) -->
     <model name="line_a0"><static>true</static><pose>-0.90 0.985 0.003 0 0 0</pose><link name="link">
         <collision name="c"><geometry><box><size>0.02 0.90 0.002</size></box></geometry></collision>
         <visual name="v"><cast_shadows>false</cast_shadows><geometry><box><size>0.02 0.90 0.002</size></box></geometry>
@@ -409,7 +409,7 @@ ament_package()
         <visual name="v"><cast_shadows>false</cast_shadows><geometry><box><size>0.02 0.90 0.002</size></box></geometry>
           <material><ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse></material></visual></link></model>
 
-    <!-- Row B 슬롯 구획선 5개 -->
+<!-- Row B slot partition line 5 -->
     <model name="line_b0"><static>true</static><pose>-0.90 -0.985 0.003 0 0 0</pose><link name="link">
         <collision name="c"><geometry><box><size>0.02 0.90 0.002</size></box></geometry></collision>
         <visual name="v"><cast_shadows>false</cast_shadows><geometry><box><size>0.02 0.90 0.002</size></box></geometry>
@@ -431,7 +431,7 @@ ament_package()
         <visual name="v"><cast_shadows>false</cast_shadows><geometry><box><size>0.02 0.90 0.002</size></box></geometry>
           <material><ambient>1 1 1 1</ambient><diffuse>1 1 1 1</diffuse></material></visual></link></model>
 
-    <!-- 정적 차량 (static=true, box geometry, A3/B3 비워둠)
+<!-- static vehicle (static=true, box geometry, A3 /B3 left empty)
          크기: 0.78m(길이) × 0.34m(폭) × 0.13m(높이), center z=0.065
          Row A yaw=-π/2 (앞면 차로 방향), Row B yaw=+π/2 -->
 
@@ -451,7 +451,7 @@ ament_package()
           <material><ambient>0.1 0.1 0.85 1</ambient><diffuse>0.1 0.1 0.85 1</diffuse></material></visual>
       </link>
     </model>
-    <!-- A3: LIMO 2 동적 스폰 -->
+<!-- A3 : LIMO 2 dynamic spawn -->
     <!-- A4 silver -->
     <model name="static_car_a4"><static>true</static><pose>0.675 0.985 0.065 0 0 -1.5708</pose>
       <link name="link">
@@ -476,7 +476,7 @@ ament_package()
           <material><ambient>0.1 0.75 0.1 1</ambient><diffuse>0.1 0.75 0.1 1</diffuse></material></visual>
       </link>
     </model>
-    <!-- B3: LIMO 1 임시 후진 슬롯 — 비워둠 -->
+<!-- B 3 : LIMO 1 Temporary reverse slot — left empty -->
     <!-- B4 orange -->
     <model name="static_car_b4"><static>true</static><pose>0.675 -0.985 0.065 0 0 1.5708</pose>
       <link name="link">
@@ -496,12 +496,12 @@ ament_package()
 <?xml version="1.0"?>
 <robot name="limo" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-  <!-- robot_namespace: spawn_entity -robot_namespace 와 동일한 값 설정
+<!-- robot_namespace : Set the same value as spawn_entity - robot_namespace
        후방 카메라 플러그인 식별용; 실제 토픽 namespacing은 spawn이 처리 -->
   <xacro:arg name="robot_namespace" default="/"/>
   <xacro:property name="robot_ns" value="$(arg robot_namespace)"/>
 
-  <!-- 기존 LIMO Ackermann URDF (Gazebo 플러그인 포함)
+<!-- Original LIMO Ackermann URDF (with Gazebo plugin)
        경로: limo_car/gazebo/ (urdf/ 아님!)
        포함 내용:
          - libgazebo_ros_ackermann_drive (cmd_vel, odom)
@@ -511,7 +511,7 @@ ament_package()
        주의: ackermann_with_sensor.xacro 는 외부 인자를 받지 않음 -->
   <xacro:include filename="$(find limo_car)/gazebo/ackermann_with_sensor.xacro"/>
 
-  <!-- 후방 카메라 링크 (base_link 기준 후방 -0.30m, 높이 +0.10m) -->
+<!-- Rear camera link (rear -0.30m based on base_link, height + 0.10m) -->
   <link name="rear_camera_link">
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -534,7 +534,7 @@ ament_package()
     <origin xyz="-0.30 0 0.10" rpy="0 0 3.14159"/>
   </joint>
 
-  <!-- 광학 프레임 (ROS 관례: x-right, y-down, z-forward) -->
+<!-- Optical frame ( ROS convention: x-right, y-down, z-forward) -->
   <link name="rear_camera_optical_frame"/>
   <joint name="rear_camera_optical_joint" type="fixed">
     <parent link="rear_camera_link"/>
@@ -542,7 +542,7 @@ ament_package()
     <origin xyz="0 0 0" rpy="-1.5708 0 -1.5708"/>
   </joint>
 
-  <!-- Gazebo 후방 Depth 카메라 플러그인
+<!-- Gazebo Rear Depth Camera Plugin
        namespace 미지정 → spawn_entity -robot_namespace 가 자동 적용
        limo1: /limo1/rear_camera/depth/image_raw
        limo2: /limo2/rear_camera/depth/image_raw -->
@@ -647,8 +647,8 @@ from launch.actions import ExecuteProcess, GroupAction, TimerAction
 from launch.substitutions import Command, FindExecutable
 from launch_ros.actions import Node, PushRosNamespace
 
-# ── 초기 스폰 포즈 ──────────────────────────────────────────────────
-# z=0.145: base_link root, wheel_offset=-0.10, wheel_r=0.045 → 바퀴 하단=z=0
+# ── Initial spawn pose ──────────────────────────────────────────────────────
+# z= 0.145 : base_link root, wheel_offset = -0.10 , wheel_r = 0.045 → Bottom of wheel=z= 0
 LIMO1_INIT = dict(x='0.225', y='0.0',   z='0.145', R='0', P='0', Y='1.5708')
 LIMO2_INIT = dict(x='0.225', y='0.985', z='0.145', R='0', P='0', Y='-1.5708')
 
@@ -657,11 +657,11 @@ def generate_launch_description():
     pkg_world = get_package_share_directory('remote_parking_world')
     urdf_xacro = os.path.join(pkg_world, 'urdf', 'limo_with_rear_camera.urdf.xacro')
 
-    # xacro 런타임 처리 (Command 치환자)
+# xacro runtime processing (Command substitute)
     limo1_desc = Command([FindExecutable(name='xacro'), ' ', urdf_xacro, ' robot_namespace:=limo1'])
     limo2_desc = Command([FindExecutable(name='xacro'), ' ', urdf_xacro, ' robot_namespace:=limo2'])
 
-    # robot_state_publisher 그룹
+# robot_state_publisherGroup
     limo1_group = GroupAction([
         PushRosNamespace('limo1'),
         Node(package='robot_state_publisher', executable='robot_state_publisher',
@@ -679,8 +679,8 @@ def generate_launch_description():
              parameters=[{'use_sim_time': True}]),
     ])
 
-    # Gazebo 스폰 (3초 후 — RSP 준비 대기)
-    # -robot_namespace 필수: Gazebo 플러그인 토픽 namespacing
+# Spawn Gazebo (after 3 seconds — wait for RSP to be ready)
+# - robot_namespace Required: Gazebo plugin topic namespacing
     spawn_limo1 = TimerAction(period=3.0, actions=[ExecuteProcess(cmd=[
         'ros2', 'run', 'gazebo_ros', 'spawn_entity.py',
         '-entity', 'limo1',
@@ -701,7 +701,7 @@ def generate_launch_description():
         '-timeout', '120.0',
     ], output='screen')])
 
-    # dynamic_tracker_node (5초 후 — 스폰 완료 대기)
+# dynamic_tracker_node (after 5 seconds — wait for spawn to complete)
     dynamic_tracker = TimerAction(period=5.0, actions=[Node(
         package='my_valet_parking', executable='dynamic_tracker_node',
         output='screen',
@@ -729,7 +729,7 @@ def generate_launch_description():
         }],
     )])
 
-    # mission_manager FSM (6초 후)
+# mission_manager FSM (after 6 seconds)
     mission_manager = TimerAction(period=6.0, actions=[Node(
         package='remote_parking_manager', executable='mission_manager',
         output='screen',
@@ -759,15 +759,15 @@ def generate_launch_description():
 
 ```bash
 #!/usr/bin/env bash
-# 빠른 리셋: Gazebo 재시작 없이 로봇 위치만 초기화
-# 사용법: bash reset_robots.sh [teleport|respawn]
-# teleport (기본): set_entity_state로 즉시 이동 (~0.5초)
-# respawn: delete + respawn (~5초, 완전 초기화)
+# Quick reset: Reset only the robot position without restarting Gazebo
+# Usage: bash reset_robots.sh [teleport|respawn]
+# teleport (default): move to set_entity_state immediately (~0.5 seconds)
+# respawn: delete + respawn (~5 seconds, full reset)
 
 set -e
 MODE=${1:-"teleport"}
 
-# z=0.145: ackermann.xacro 기준 바퀴 하단 z=0 되는 높이
+# z= 0.145 : Height at the bottom of the wheel based on ackermann.xacro z= 0
 LIMO1_POSE="{position: {x: 0.225, y: 0.0,   z: 0.145}, orientation: {x: 0.0, y: 0.0, z: 0.7071, w: 0.7071}}"
 LIMO2_POSE="{position: {x: 0.225, y: 0.985, z: 0.145}, orientation: {x: 0.0, y: 0.0, z: -0.7071, w: 0.7071}}"
 ZERO_TWIST="{linear: {x:0,y:0,z:0}, angular: {x:0,y:0,z:0}}"
@@ -776,10 +776,10 @@ LIMO2_INIT="-x 0.225 -y 0.985 -z 0.145 -R 0 -P 0 -Y -1.5708"
 
 echo "━━━ Remote Parking Reset (MODE: $MODE) ━━━"
 
-# FSM 리셋 신호
+# FSM reset signal
 ros2 topic pub --once /remote_parking/reset std_msgs/Bool "data: true" 2>/dev/null || true
 
-# 정지 명령
+# stop command
 ros2 topic pub --once /limo1/cmd_vel geometry_msgs/Twist \
   "{linear:{x:0,y:0,z:0},angular:{x:0,y:0,z:0}}" 2>/dev/null || true
 ros2 topic pub --once /limo2/cmd_vel geometry_msgs/Twist \
@@ -961,7 +961,7 @@ class RemoteParkingManager(Node):
         self._build_limo2_waypoints()
         self.get_logger().info('🚗 RemoteParkingManager 준비 — /start_remote_parking 대기')
 
-    # ── 웨이포인트 ────────────────────────────────────────────────────
+# ── Waypoint ────────────────────────────────────────────────────────
     def _build_limo2_waypoints(self):
         self.limo2_waypoints = [
             (0.225,  0.2,  -math.pi/2),   # 슬롯 → 차로 진입
@@ -971,7 +971,7 @@ class RemoteParkingManager(Node):
         ]
         self.limo2_wp_idx = 0
 
-    # ── 콜백 ─────────────────────────────────────────────────────────
+# ── callback ────────────────────────────────────────────────────────────
     def _l1_odom_cb(self, m): self.limo1_odom = m
     def _l2_odom_cb(self, m): self.limo2_odom = m
     def _slot_cb(self, m):    self.target_slot = m
@@ -983,7 +983,7 @@ class RemoteParkingManager(Node):
                           & (ranges < msg.range_max), ranges, np.inf)
         n = len(ranges)
         if n == 0: return
-        # ±30° (limo_valet_parking_node.py 기준 ESTOP_FRONT_START/END_DEG=±30)
+# ±30° (ESTOP_FRONT_START /END_DEG =±30 based on limo_valet_parking_node.py)
         span = int(30 / math.degrees(msg.angle_increment))
         fi = np.concatenate([np.arange(0, span), np.arange(n-span, n)])
         self.front_obstacle_m = float(np.min(ranges[fi]))
@@ -1024,7 +1024,7 @@ class RemoteParkingManager(Node):
         self.prec_ok_since = None; self._build_limo2_waypoints()
         self._transition_to(MissionState.IDLE)
 
-    # ── 제어 루프 ─────────────────────────────────────────────────────
+# ── Control loop ────────────────────────────────────────────────────────
     def _control_loop(self):
         s = String(); s.data = self.state.name; self.status_pub.publish(s)
 
@@ -1055,7 +1055,7 @@ class RemoteParkingManager(Node):
         angular = float(np.clip(self.EVADE_YAW_KP * yaw_err, -1.5, 1.5))
         self._pub(self.limo1_cmd, linear, angular)
 
-    # ── LIMO 2 출차 ───────────────────────────────────────────────────
+# ── LIMO 2 Departure ──────────────────────────────────────────────────────
     def _exit_init(self):
         self._build_limo2_waypoints()
         self._transition_to(MissionState.LIMO2_EXITING)
@@ -1087,7 +1087,7 @@ class RemoteParkingManager(Node):
         self._pub(self.limo2_cmd, lin, ang)
         return False
 
-    # ── 슬롯 스캔 ─────────────────────────────────────────────────────
+# ── Slot scan ─────────────────────────────────────────────────────────
     def _scan(self):
         if self.scan_start_time is None:
             self.scan_start_time = self.get_clock().now().nanoseconds * 1e-9
@@ -1098,7 +1098,7 @@ class RemoteParkingManager(Node):
             self.get_logger().warn('슬롯 스캔 타임아웃 → fallback 사용')
             self._transition_to(MissionState.LIMO1_REPARK)
 
-    # ── 재주차 ────────────────────────────────────────────────────────
+# ── Re-parking ───────────────────────────────────────────────────────────
     def _repark(self):
         if self.limo1_odom is None: return
         if self.front_obstacle_m < self.ESTOP_DIST_M:
@@ -1158,7 +1158,7 @@ class RemoteParkingManager(Node):
         lin = float(np.clip(remaining * 0.4, 0.010, 0.022))
         self._pub(self.limo1_cmd, lin, ang)
 
-    # ── 유틸 ─────────────────────────────────────────────────────────
+# ── Utility ────────────────────────────────────────────────────────────
     def _pub(self, pub, lin: float, ang: float):
         m = Twist(); m.linear.x = float(lin); m.angular.z = float(ang); pub.publish(m)
 
@@ -1244,9 +1244,9 @@ install_scripts=$base/lib/remote_parking_manager
 
 ---
 
-## 7. 빌드 & 실행
+## 7. Build & Run
 
-### 빌드
+### Build
 
 ```bash
 cd ~/remote_parking_ws
@@ -1257,87 +1257,87 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-### 실행 순서
+### Execution order
 
 ```bash
-# ─── Terminal 1: Gazebo 서버 (1회만) ───────────────────────────────
+# ─── Terminal 1: Gazebo server (1 only) ────────────────────────────────
 ros2 launch remote_parking_world world_server.launch.py gui:=true
 
-# ─── Terminal 2: 로봇 스폰 + 노드 (테스트마다) ─────────────────────
+# ─── Terminal 2: Robot spawn + node (per test) ──────────────────────
 ros2 launch remote_parking_world spawn_robots.launch.py
 
-# ─── Terminal 3: 미션 시작 ─────────────────────────────────────────
+# ─── Terminal 3: Start mission ───────────────────────────────────────────
 ros2 service call /start_remote_parking std_srvs/srv/Trigger '{}'
 
-# ─── 재시도 (Gazebo 재시작 없이 ~0.5초) ───────────────────────────
+# ─── Retry (~0.5 seconds without Gazebo restart) ─────────────────────────────
 bash ~/remote_parking_ws/src/remote_parking_world/scripts/reset_robots.sh teleport
 ros2 service call /start_remote_parking std_srvs/srv/Trigger '{}'
 ```
 
-### 상태 모니터링
+### Status monitoring
 
 ```bash
-# FSM 상태
+# FSM status
 ros2 topic echo /remote_parking/status
 
-# 슬롯 탐지 여부
+# Whether to detect slots
 ros2 topic echo /limo1/target_slot
 
-# 로봇 위치
+# robot position
 ros2 topic echo /limo1/odom --no-arr
 ros2 topic echo /limo2/odom --no-arr
 ```
 
 ---
 
-## 8. 수정된 버그 전체 목록
+## 8. Full list of bugs fixed
 
-| # | 파일 | 버그 내용 | 수정 |
+| # | file | Bug Details | Edit |
 |---|------|-----------|------|
-| 1 | world_server.launch.py | `ament_python_file_backend` 존재하지 않는 패키지 import | 제거 |
-| 2 | world_server.launch.py | `IfCondition` import 누락 | 추가 |
-| 3 | spawn_robots.launch.py | 동일 잘못된 패키지 import | `ament_index_python` 으로 수정 |
-| 4 | spawn_robots.launch.py | `import xacro` + `make_robot_description()` — launch 파일에서 호출 구조 오류 | 함수 제거, `Command` 치환자 유지 |
-| 5 | spawn_robots.launch.py | xacro 인자 `robot_name` → `robot_namespace` (URDF 파라미터명 불일치) | 수정 |
-| 6→12 | spawn_robots.launch.py | spawn z=`0.065` → `0.145` (base_link root, 바퀴 높이 계산 오류) | 수정 |
-| 7→14 | limo_with_rear_camera.urdf.xacro | include: `urdf/limo_ackerman_base.xacro` (Gazebo 플러그인 없음) | `gazebo/ackermann_with_sensor.xacro` 로 수정 |
-| 8 | limo_with_rear_camera.urdf.xacro | `<xacro:arg name="robot_name">` → `robot_namespace` | 수정 |
-| 9→15 | limo_with_rear_camera.urdf.xacro | 후방 카메라 `<namespace>` hardcoding → 이중 namespace 충돌 | 비워서 spawn이 처리하도록 변경 |
-| 10 | mission_manager.py | 장애물 감지 각도 `±20°` → `±30°` (`limo_valet_parking_node.py` 기준) | 수정 |
-| 11 | spawn_robots.launch.py | `dynamic_tracker_node` 에 `allow_fallback_without_baseline` 누락 | 추가 |
-| 12 | reset_robots.sh | 리셋 위치 z=`0.065` → `0.145` | 수정 |
-| 13 | spawn_robots.launch.py | spawn 명령에 `-robot_namespace limo1/limo2` 누락 (Gazebo 플러그인 namespacing 실패) | 추가 |
+|  1 |  world_server.launch.py | `ament_python_file_backend` non-existent package import | Remove |
+|  2 |  world_server.launch.py | Missing `IfCondition` import | Add |
+|  3 |  spawn_robots.launch.py | Same invalid package import | Edit to `ament_index_python` |
+|  4 |  spawn_robots.launch.py | `import xacro`+`make_robot_description ()`— call structure error in launch file | Remove function, keep`Command` substituent |
+|  5 |  spawn_robots.launch.py | xacro argument `robot_name` → `robot_namespace` (URDF parameter name mismatch) | Edit |
+|  6 → 12 |  spawn_robots.launch.py | spawn z=`0.065` → `0.145` (base_link root, wheel height calculation error) | Edit |
+|  7 → 14 |  limo_with_rear_camera.urdf.xacro | include: `urdf/limo_ackerman_base.xacro` (no Gazebo plugin) | Edit to `gazebo/ackermann_with_sensor.xacro` |
+|  8 |  limo_with_rear_camera.urdf.xacro | `<xacro:arg name=" robot_name ">`→` robot_namespace ` | Edit |
+|  9 → 15 |  limo_with_rear_camera.urdf.xacro | Rear camera `<namespace>` hardcoding → double namespace conflict | Leave it blank and change it to be handled by spawn |
+|  10 |  mission_manager.py | Obstacle detection angle `± 20° `→`± 30° `(based on` limo_valet_parking_node.py `) | Edit |
+|  11 |  spawn_robots.launch.py | Missing `allow_fallback_without_baseline`in`dynamic_tracker_node` | Add |
+|  12 |  reset_robots.sh | Reset position z=`0.065` → `0.145` | Edit |
+|  13 |  spawn_robots.launch.py | spawn command is missing `-robot_namespace limo 1 /limo2` (Gazebo plugin namespacing fails) | Add |
 
 ---
 
-## 9. 알려진 제한 및 주의사항
+## 9. Known limitations and precautions
 
-### TF 충돌 (비치명적)
-LIMO 1·2가 동일 URDF 링크명(`base_link`, `laser_link` 등)을 공유하므로 `/tf` 트리에서 충돌 발생.  
-**영향**: RViz에서 두 로봇이 겹쳐 보일 수 있음.  
-**비영향**: 오도메트리 기반 제어(`/limo1/odom`, `/limo2/odom`)는 정상 동작.  
-**해결책 (선택)**: 각 robot_state_publisher에 `frame_prefix` 또는 `tf_prefix` 파라미터 추가.
+### TF crash (non-fatal)
+A conflict occurs in the `/tf` tree because LIMO 1 · 2 share the same URDF link name (`base_link`, `laser_link`, etc.).
+**IMPACT**: Two robots may appear overlapping in RViz.
+**No effect**: Odometry-based control (`/limo1/odom`, `/limo2/odom`) operates normally.
+**Solution (optional)**: Add `frame_prefix` or `tf_prefix` parameter to each robot_state_publisher.
 
-### IMU 토픽 하드코딩 (`sensor.xacro` 확인)
+### Hardcoding topic IMU (check `sensor.xacro`)
 ```xml
 <topicName>/limo/imu</topicName>  <!-- 절대 경로, namespace 미적용 -->
 ```
-LIMO 1·2 양쪽이 `/limo/imu` 로 발행 → 충돌.  
-**영향**: IMU 미사용 시 무관. EKF 통합 시 토픽 분리 필요.
+LIMO 1 · 2 both issue `/limo/imu` → collision.
+**Impact**: Irrelevant if IMU is not used.  Topic separation is required when integrating EKF.
 
-### base_footprint 미존재 (`ackermann.xacro` 확인)
+### base_footprint does not exist (check `ackermann.xacro`)
 ```xml
-<!-- <link name="base_footprint"/> -->  ← 주석 처리됨
+<!-- <link name=" base_footprint "/> --> ← Commented out
 <robot_base_frame>base_footprint</robot_base_frame>  ← 플러그인 설정에는 존재
 ```
-플러그인이 존재하지 않는 프레임을 참조하므로 TF 경고 발생 가능.  
-**해결책 (선택)**: `ackermann.xacro` 의 주석을 해제하고 spawn z를 재계산.
+A TF warning may occur because the plugin references a frame that does not exist.
+**Solution (optional)**: Uncomment `ackermann.xacro` and recalculate spawn z.
 
-### 시뮬레이터 속도 최적화 효과
-| 항목 | 기존 (start_parking_limo_master.sh) | 신규 |
+### Simulator speed optimization effect
+| Item | Existing (start_parking_limo_master.sh) | New |
 |------|--------------------------------------|------|
-| 매 실행 colcon build | ~10분 | **없음** |
-| gzserver sleep | 15초 | 서비스 대기 |
-| 물리 엔진 Hz | 1000 Hz | **500 Hz** |
-| 그림자 렌더링 | ON | **OFF** |
-| 재시도 소요 시간 | ~15분 | **~0.5초** |
+| Every time I run colcon build | ~10 minutes | **None** |
+| gzserver sleep |  15 seconds | waiting for service |
+| Physics Engine Hz |  1000 Hz | ** 500 Hz** |
+| Shadow Rendering | ON | **OFF** |
+| Retry time taken | ~15 minutes | **~0.5 seconds** |

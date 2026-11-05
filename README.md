@@ -1,37 +1,37 @@
 # Remote Parking Capstone
 
-ROS 2와 Gazebo에서 다중 LIMO 차량의 출차 선택부터 빈 주차면 재주차까지 연결한 팀 캡스톤 결과물입니다.
+This team capstone project implements a multi-vehicle remote parking scenario in ROS 2 and Gazebo, from selecting a vehicle to exit through re-parking LIMO1 in the vacated space.
 
 ## Scenario
 
 ```mermaid
 flowchart LR
-    A[IDLE] --> B[LIMO1 후진 회피]
-    B --> C[출차 차량 선택]
-    C --> D[선택 차량 출차]
-    D --> E[빈 슬롯 확인]
-    E --> F[Hybrid A* 경로 생성]
-    F --> G[LIMO1 재주차]
+A[IDLE] --> B[LIMO1 backward avoidance]
+B --> C[Select exit vehicle]
+C --> D[Exit selected vehicle]
+D --> E[Check for empty slots]
+E --> F[Create Hybrid A* path]
+F --> G[LIMO1 repark]
     G --> H[FINISH]
 ```
 
-이중주차 상태의 LIMO1이 통로를 비운 뒤 사용자가 A2, A3, A4 중 출차 차량을 선택합니다. 선택 차량의 출차가 끝나면 빈 슬롯을 확인하고, LIMO1이 계획된 경로를 추종해 재주차합니다.
+After the double-parked LIMO1 clears the aisle, the user selects A2, A3, or A4 to exit. Once the selected vehicle has left, the system verifies that the slot is empty, plans a path, and guides LIMO1 back into the vacated slot.
 
 ## System Components
 
 | Package | Responsibility |
 |---|---|
-| `remote_parking_manager` | 미션 FSM, Hybrid A* 및 Reeds-Shepp 기반 경로 계획, 차량 제어 |
-| `remote_parking_world` | Gazebo 월드, 다중 차량 스폰, 초기화 및 차량 선택 스크립트 |
-| `my_valet_parking` | 동적 추적, 출차 제어, 슬롯 탐지 및 주차 관련 보조 노드 |
-| `limo_car` | LIMO URDF/Xacro, 메시 및 Gazebo 설정 |
+| `remote_parking_manager` | Mission FSM, Hybrid A* and Reeds-Shepp based path planning, vehicle control |
+| `remote_parking_world` | Gazebo world, multi-vehicle spawning, initialization and vehicle selection script |
+| `my_valet_parking` | Auxiliary nodes for dynamic tracking, exit control, slot detection, and parking |
+| `limo_car` | LIMO URDF/Xacro files, meshes, and Gazebo configuration |
 
 ## Validation Focus
 
-- 미션을 `IDLE → 회피 → 차량 선택 → 출차 → 슬롯 확인 → 재주차` 상태로 분리해 단계별 동작을 확인했습니다.
-- `reset_robots.sh`로 Gazebo를 재시작하지 않고 차량 위치를 초기화해 반복 시험할 수 있도록 구성했습니다.
-- 출차는 경로 추종, 재주차는 Hybrid A*와 Reeds-Shepp 경로를 사용하는 구조로 통합했습니다.
-- 상세 설계와 분석은 [SYSTEM_OVERVIEW.md](SYSTEM_OVERVIEW.md), [SYSTEM_ANALYSIS.md](SYSTEM_ANALYSIS.md), [REMOTE_PARKING_IMPLEMENTATION_GUIDE.md](REMOTE_PARKING_IMPLEMENTATION_GUIDE.md)에 남겨져 있습니다.
+- The mission is divided into `IDLE → avoidance → vehicle selection → exit → slot verification → re-parking` states so each stage can be validated independently.
+- `reset_robots.sh` resets vehicle positions without restarting Gazebo, supporting repeatable simulation tests.
+- Vehicle exit uses path following, while re-parking combines Hybrid A* planning with Reeds-Shepp paths.
+- Detailed design and analysis are documented in [SYSTEM_OVERVIEW.md](SYSTEM_OVERVIEW.md), [SYSTEM_ANALYSIS.md](SYSTEM_ANALYSIS.md), and [REMOTE_PARKING_IMPLEMENTATION_GUIDE.md](REMOTE_PARKING_IMPLEMENTATION_GUIDE.md).
 
 ## Original Environment
 
@@ -48,23 +48,23 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-터미널별로 다음 순서로 실행합니다.
+Execute each terminal in the following order:
 
 ```bash
-# 1. Gazebo 월드
+# 1. Gazebo world
 ros2 launch remote_parking_world world_server.launch.py gui:=true
 
-# 2. 차량과 제어 노드
+# 2. Vehicles and control nodes
 ros2 launch remote_parking_world spawn_robots.launch.py
 
-# 3. 미션 시작
+# 3. Start the mission
 ros2 service call /start_remote_parking std_srvs/srv/Trigger '{}'
 
-# 4. 출차 차량 선택: a2, a3, a4
+# 4. Select the exit vehicle: a2, a3, or a4
 bash src/remote_parking_world/scripts/select_car.sh a3
 ```
 
-재시험 시에는 차량 상태를 초기화한 뒤 미션을 다시 시작합니다.
+When retesting, the vehicle status is reset and the mission is restarted.
 
 ```bash
 bash src/remote_parking_world/scripts/reset_robots.sh teleport
@@ -73,9 +73,9 @@ ros2 service call /start_remote_parking std_srvs/srv/Trigger '{}'
 
 ## License
 
-패키지별 라이선스와 외부 구성요소 고지는 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)를 확인해 주세요.
+Please check [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for package-specific licenses and external component notices.
 
 ## Repository Relationship
 
-- [Remote Parking Simulation Environment](https://github.com/gnoyk/WeMeet_Capstone_Base_Environment): LIMO 주차 시나리오 개발에 사용한 ROS 2/Gazebo 시뮬레이션 환경과 실행 도구
-- 이 저장소: 다중 차량 원격 주차 시나리오를 FSM으로 통합한 캡스톤 프로젝트
+- [Remote Parking Simulation Environment](https://github.com/gnoyk/WeMeet_Capstone_Base_Environment): LIMO ROS 2/Gazebo simulation environment and execution tools used to develop parking scenarios
+- This repository: Capstone project integrating multi-vehicle remote parking scenario into FSM
